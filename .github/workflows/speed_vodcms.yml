@@ -1,71 +1,64 @@
-name: 点播源自动测速
-
+name: 点播源API可用性测速
 on:
-  # 定时触发：每周六 0 点（UTC 时间，对应北京时间 08:00，如需北京时间 0 点请改为 16,*,*,6,0）
   schedule:
-    - cron: '0 0 * * 6'
-  # 允许手动触发测试
+    # cron UTC时间: 北京时间周六0点 = UTC周五16点
+    - cron: '0 16 * * 5'
   workflow_dispatch:
 
 jobs:
-  speed-test:
+  check-api:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: 检出代码
+      - name: 检出仓库代码
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
-      - name: 安装依赖
-        run: |
-          sudo apt update
-          sudo apt install -y curl jq
+      - name: 安装工具 jq curl
+        run: sudo apt update && sudo apt install -y jq curl
 
-      - name: 执行源测速并生成可用源文件
+      - name: API测速处理
         run: |
-          # 定义输入/输出文件
-          INPUT_FILE="VODCMSXML.json"
-          OUTPUT_FILE="VODCMSXML-YZ.json"
-          
-          # 测速函数（检测视频流可访问性）
-          speed_test() {
-            local url="$1"
-            if [[ -z "$url" ]]; then return 1; fi
-            # 只请求头，超时 3 秒，状态码 200/302 视为有效
-            curl -s -I -m 3 -o /dev/null -w "%{http_code}" "$url" | grep -qE '200|302'
-            return $?
-          }
-          
-          # 读取源列表并测速
-          echo "开始测速，共 $(jq '.channels | length' $INPUT_FILE) 个源"
-          jq -c '.channels[]' $INPUT_FILE | while read -r channel; do
-            url=$(echo "$channel" | jq -r '.url')
-            name=$(echo "$channel" | jq -r '.name')
-            
-            if speed_test "$url"; then
-              echo "✅ 可用：$name"
-              echo "$channel" >> valid_channels.tmp
-            else
-              echo "❌ 失效：$name"
-            fi
+          INPUT="VODCMSXML.json"
+          OUTPUT="VODCMSXML-YZ.json"
+          TMP_VALID=valid.tmp.jsonl
+          rm -f "$TMP_VALID" "$OUTPUT"
+
+          # 读取顶层数组每一个对象
+          total=$(jq 'length' "$INPUT")
+          echo "总源数量: $total"
+
+          jq -c '.[]' "$INPUT" | while read -r item; do
+              api_url=$(echo "$item" | jq -r '.api')
+              src_name=$(echo "$item" | jq -r '.name')
+              src_id=$(echo "$item" | jq -r '.id')
+
+              # api为空直接跳过
+              if [[ -z "$api_url" || "$api_url" == "null" ]];then
+                echo "⚠️ id:${src_id} ${src_name} api链接为空，跳过"
+                continue
+              fi
+
+              # curl测速：HEAD请求，超时5s；200/301/302视为可用
+              resp_code=$(curl -s -I -m 5 -o /dev/null -w "%{http_code}" "$api_url" || true)
+              if [[ "$resp_code" =~ ^(200|301|302)$ ]];then
+                echo "✅ [OK] id:${src_id} ${src_name} | ${api_url}"
+                echo "$item" >> "$TMP_VALID"
+              else
+                echo "❌ [FAIL] id:${src_id} ${src_name} | code=${resp_code} ${api_url}"
+              fi
           done
-          
-          # 生成最终 JSON 文件
-          jq -n '{
-              "update_time": "'$(date -Iseconds)'",
-              "count": $(wc -l < valid_channels.tmp),
-              "channels": [inputs]
-          }' valid_channels.tmp > $OUTPUT_FILE
-          
-          # 清理临时文件
-          rm -f valid_channels.tmp
-          echo "测速完成！有效源已保存到 $OUTPUT_FILE"
 
-      - name: 提交并推送结果
+          # 将每行json对象重新组装成顶层数组，保持和原文件完全相同格式
+          jq -s '.' "$TMP_VALID" > "$OUTPUT"
+          rm -f "$TMP_VALID"
+
+          valid_count=$(jq 'length' "$OUTPUT")
+          echo "测速完成，可用源数量: ${valid_count}，输出文件: ${OUTPUT}"
+
+      - name: 提交更新结果文件
         uses: EndBug/add-and-commit@v9
         with:
-          message: '✅ 自动测速：更新可用点播源'
-          add: 'VODCMSXML-YZ.json'
-          committer_name: GitHub Actions
-          committer_email: actions@github.com
+          add: VODCMSXML-YZ.json
+          message: "🤖自动测速更新VODCMSXML-YZ.json $(date '+%Y-%m-%d %H:%M')"
+          committer_name: Github‑Action
+          committer_email: action@github.com

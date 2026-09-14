@@ -11,7 +11,7 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: 检出仓库代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 安装工具 jq curl
         run: sudo apt update && sudo apt install -y jq curl libxml2-utils
@@ -73,7 +73,7 @@ jobs:
           valid_count=$(jq 'length' "$OUTPUT")
           echo "测速结束，可用源数量: ${valid_count}，输出文件：${OUTPUT}"
       - name: 提交更新结果文件
-        uses: EndBug/add-and-commit@v9
+        uses: EndBug/add-and-commit@v11
         with:
           add: VODCMSXML-YZ.json
           message: "🤖ZY‑Player风格测速更新VODCMSXML‑YZ.json $(date '+%Y‑%m‑%d %H:%M')"

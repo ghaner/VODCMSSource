@@ -749,16 +749,4 @@
     "isActive": true,
     "reverseOrder": false
   },
-  {
-    "key": "SySEUY",
-    "id": 60,
-    "name": "爱奇艺",
-    "api": "https://iqiyizyapi.com/api.php/provide/vod/at/xml/",
-    "download": "",
-    "jiexiUrl": "",
-    "group": "云播",
-    "isActive": true,
-    "reverseOrder": false,
-    "status": "可用"
-  }
 ]

@@ -1,45 +1,30 @@
-import json
-import requests
+name: VODCMS点播源测速
+on:
+  schedule:
+    - cron: '0 16 * * 5'
+  workflow_dispatch:
 
-# ====================== 配置项 ======================
-INPUT_FILE = "VODCMSXML.json"
-OUTPUT_FILE = "VODCMSXML-YZ.json"
-TIMEOUT = 3       # 单个链接超时秒数
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
-# ====================================================
+jobs:
+  speedtest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-def test_url(url: str) -> bool:
-    """链接测速探测，返回True=成功"""
-    try:
-        # HEAD请求减少流量，部分源不支持HEAD时改为 requests.get
-        resp = requests.head(url, timeout=TIMEOUT, headers=HEADERS, allow_redirects=True)
-        return resp.status_code < 400
-    except Exception:
-        return False
+      - name: 安装Python依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
 
-if __name__ == "__main__":
-    with open(INPUT_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
+      - name: 执行点播源测速脚本
+        run: python speed_vodcms.py
 
-    valid_data = []
-    total = len(data)
-    ok_cnt = 0
-
-    for idx, item in enumerate(data):
-        name = item.get("name", "")
-        url = item.get("url", "")
-        if not url:
-            continue
-        print(f"[{idx+1}/{total}] 测试：{name} -> {url}")
-        if test_url(url):
-            valid_data.append(item)
-            ok_cnt += 1
-            print(f"✅ 成功")
-        else:
-            print(f"❌ 失败")
-
-    print(f"\n测速完成：总计 {total} 条，有效 {ok_cnt} 条")
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        json.dump(valid_data, f, ensure_ascii=False, indent=2)
+      - name: 提交更新文件
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add VODCMSXML-YZ.json
+          git commit -m "🤖 自动测速更新 VODCMSXML-YZ.json $(date +'%Y-%m-%d %H:%M')" || echo "无变更无需提交"
+          git push

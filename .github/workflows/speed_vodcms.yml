@@ -38,13 +38,13 @@ jobs:
                 continue
               fi
 
-              # ZY‑Player: GET请求，5s超时，保存完整响应体，输出http_code + time_total
+              # GET请求、跟随重定向、5s超时，保存完整响应体
               result=$(curl -s -X GET -L -m 5 -o "$RESP_TMP" -w "%{http_code} %{time_total}" "$api_url" || echo "000 5.0")
               resp_code=$(echo "$result" | awk '{print $1}')
               time_total=$(echo "$result" | awk '{print $2}')
               latency_ms=$(awk -v t="$time_total" 'BEGIN{printf "%.0f", t*1000}')
 
-              # 1.网络层失败
+              # 网络层失败
               if [[ "$resp_code" == "000" ]];then
                 echo "❌[网络失败] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
                 continue
@@ -54,24 +54,18 @@ jobs:
                 continue
               fi
 
-              # 2.内容校验：ZY‑Player点播接口返回一般是xml；部分返回json；html页面直接判定失效
-              content_type=$(file --mime-type -b "$RESP_TMP")
-              is_valid_content=0
-              if [[ "$content_type" == "text/xml" || "$content_type" == "application/xml" ]];then
-                  # 尝试解析xml，看是否有vod节点特征
-                  if xmllint --noout "$RESP_TMP" 2>/dev/null;then
-                    is_valid_content=1
-                  fi
-              elif [[ "$content_type" == "application/json" || "$content_type" == "text/json" ]];then
-                  if jq empty "$RESP_TMP" 2>/dev/null;then
-                    is_valid_content=1
-                  fi
-              fi
-
-              # 排除html页面（拦截、跳转、风控页面）
+              # 返回HTML页面直接判定解析失败（风控、验证码、网页）
               if grep -iq "<html" "$RESP_TMP";then
                 echo "❌[解析失败：返回HTML风控页面] id:${src_id} ${src_name} latency:${latency_ms}ms"
                 continue
+              fi
+
+              # 不依赖MIME，优先尝试XML，失败尝试JSON，任一解析成功即有效
+              is_valid_content=0
+              if xmllint --noout "$RESP_TMP" 2>/dev/null;then
+                  is_valid_content=1
+              elif jq empty "$RESP_TMP" 2>/dev/null;then
+                  is_valid_content=1
               fi
 
               if [[ $is_valid_content -eq 1 ]];then
@@ -82,7 +76,7 @@ jobs:
               fi
           done
 
-          # 按latency_ms升序（延迟从小到大），排序完成删除临时latency_ms字段
+          # 按延迟升序排序，移除临时latency_ms字段
           jq -s 'sort_by(.latency_ms) | map(del(.latency_ms))' "$TMP_VALID" > "$OUTPUT"
           rm -f "$TMP_VALID" "$RESP_TMP"
 

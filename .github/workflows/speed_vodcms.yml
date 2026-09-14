@@ -1,67 +1,98 @@
-name: 点播源API可用性测速(按延迟升序)
+name: ZY‑Player风格点播源测速(按延迟升序)
 on:
   schedule:
-    # UTC周五16点 = 北京时间周六 00:00
+    # UTC周五16点 = 北京时间周六00:00
     - cron: '0 16 * * 5'
   workflow_dispatch:
 
 jobs:
   check-api:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: 检出仓库代码
         uses: actions/checkout@v4
 
       - name: 安装工具 jq curl
-        run: sudo apt update && sudo apt install -y jq curl
+        run: sudo apt update && sudo apt install -y jq curl libxml2-utils
 
-      - name: API测速+采集延迟+按延迟升序排序
+      - name: ZY‑Player逻辑测速，校验内容有效性，采集延迟排序
         run: |
           INPUT="VODCMSXML.json"
           OUTPUT="VODCMSXML-YZ.json"
           TMP_VALID=valid.tmp.jsonl
-          rm -f "$TMP_VALID" "$OUTPUT"
+          RESP_TMP=resp.tmp.raw
+          rm -f "$TMP_VALID" "$OUTPUT" "$RESP_TMP"
 
           total=$(jq 'length' "$INPUT")
-          echo "总源数量: $total"
+          echo "【ZY‑Player模拟测速】总源数量: $total"
 
           jq -c '.[]' "$INPUT" | while read -r item; do
               api_url=$(echo "$item" | jq -r '.api')
               src_name=$(echo "$item" | jq -r '.name')
               src_id=$(echo "$item" | jq -r '.id')
+              rm -f "$RESP_TMP"
 
               if [[ -z "$api_url" || "$api_url" == "null" ]];then
                 echo "⚠️ id:${src_id} ${src_name} api链接为空，跳过"
                 continue
               fi
 
-              # 获取http_code + 总耗时毫秒
-              result=$(curl -s -X GET -m 5 -o /dev/null -w "%{http_code} %{time_total}" "$api_url" || echo "000 5.0")
+              # ZY‑Player: GET请求，5s超时，保存完整响应体，输出http_code + time_total
+              result=$(curl -s -X GET -L -m 5 -o "$RESP_TMP" -w "%{http_code} %{time_total}" "$api_url" || echo "000 5.0")
               resp_code=$(echo "$result" | awk '{print $1}')
               time_total=$(echo "$result" | awk '{print $2}')
               latency_ms=$(awk -v t="$time_total" 'BEGIN{printf "%.0f", t*1000}')
 
-              if [[ "$resp_code" =~ ^(200|301|302)$ ]];then
-                echo "✅ [OK] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
-                # 追加 latency_ms 字段，输出json行
+              # 1.网络层失败
+              if [[ "$resp_code" == "000" ]];then
+                echo "❌[网络失败] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
+                continue
+              fi
+              if [[ ! "$resp_code" =~ ^(200|301|302)$ ]];then
+                echo "❌[HTTP异常 ${resp_code}] id:${src_id} ${src_name} latency:${latency_ms}ms"
+                continue
+              fi
+
+              # 2.内容校验：ZY‑Player点播接口返回一般是xml；部分返回json；html页面直接判定失效
+              content_type=$(file --mime-type -b "$RESP_TMP")
+              is_valid_content=0
+              if [[ "$content_type" == "text/xml" || "$content_type" == "application/xml" ]];then
+                  # 尝试解析xml，看是否有vod节点特征
+                  if xmllint --noout "$RESP_TMP" 2>/dev/null;then
+                    is_valid_content=1
+                  fi
+              elif [[ "$content_type" == "application/json" || "$content_type" == "text/json" ]];then
+                  if jq empty "$RESP_TMP" 2>/dev/null;then
+                    is_valid_content=1
+                  fi
+              fi
+
+              # 排除html页面（拦截、跳转、风控页面）
+              if grep -iq "<html" "$RESP_TMP";then
+                echo "❌[解析失败：返回HTML风控页面] id:${src_id} ${src_name} latency:${latency_ms}ms"
+                continue
+              fi
+
+              if [[ $is_valid_content -eq 1 ]];then
+                echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
                 echo "$item" | jq --argjson lat "$latency_ms" '. + {latency_ms: $lat}' >> "$TMP_VALID"
               else
-                echo "❌ [FAIL] id:${src_id} ${src_name} code=${resp_code} latency:${latency_ms}ms"
+                echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
               fi
           done
 
-          # 组装数组，按 latency_ms 升序排序（延迟小排在前面）
-          jq -s 'sort_by(.latency_ms)' "$TMP_VALID" > "$OUTPUT"
-          rm -f "$TMP_VALID"
+          # 按latency_ms升序（延迟从小到大），排序完成删除临时latency_ms字段
+          jq -s 'sort_by(.latency_ms) | map(del(.latency_ms))' "$TMP_VALID" > "$OUTPUT"
+          rm -f "$TMP_VALID" "$RESP_TMP"
 
           valid_count=$(jq 'length' "$OUTPUT")
-          echo "测速完成，可用源数量: ${valid_count}，已按延迟升序排序，输出: ${OUTPUT}"
+          echo "测速结束，可用源数量: ${valid_count}，输出文件：${OUTPUT}"
 
       - name: 提交更新结果文件
         uses: EndBug/add-and-commit@v9
         with:
           add: VODCMSXML-YZ.json
-          message: "🤖测速+按延迟升序更新VODCMSXML-YZ.json $(date '+%Y-%m-%d %H:%M')"
+          message: "🤖ZY‑Player风格测速更新VODCMSXML‑YZ.json $(date '+%Y‑%m‑%d %H:%M')"
           committer_name: Github‑Action
           committer_email: action@github.com

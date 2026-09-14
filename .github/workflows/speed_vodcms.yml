@@ -1,9 +1,18 @@
-name: ZY‑Player风格点播源测速(按延迟升序)
+name: ZY‑Player风格测速 + 部署GitHub‑Pages
 on:
   schedule:
     # UTC周五16点 = 北京时间周六00:00
     - cron: '0 16 * * 5'
   workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
 
 jobs:
   check-api:
@@ -13,7 +22,7 @@ jobs:
       - name: 检出仓库代码
         uses: actions/checkout@v4
 
-      - name: 安装工具 jq curl
+      - name: 安装工具 jq curl libxml2‑utils
         run: sudo apt update && sudo apt install -y jq curl libxml2-utils
 
       - name: ZY‑Player逻辑测速，校验内容有效性，采集延迟排序
@@ -54,7 +63,7 @@ jobs:
                 continue
               fi
 
-              # 返回HTML页面直接判定解析失败（风控、验证码、网页）
+              # 返回HTML页面直接判定解析失败（风控、验证码）
               if grep -iq "<html" "$RESP_TMP";then
                 echo "❌[解析失败：返回HTML风控页面] id:${src_id} ${src_name} latency:${latency_ms}ms"
                 continue
@@ -83,10 +92,24 @@ jobs:
           valid_count=$(jq 'length' "$OUTPUT")
           echo "测速结束，可用源数量: ${valid_count}，输出文件：${OUTPUT}"
 
-      - name: 提交更新结果文件
-        uses: EndBug/add-and-commit@v9
+      # ---------- GitHub‑Pages部署部分 ----------
+      - name: 准备pages产物目录
+        run: |
+          mkdir -p ./pages
+          cp VODCMSXML-YZ.json ./pages/
+
+      - name: 上传pages工件
+        uses: actions/upload-pages-artifact@v4
         with:
-          add: VODCMSXML-YZ.json
-          message: "🤖ZY‑Player风格测速更新VODCMSXML‑YZ.json $(date '+%Y‑%m‑%d %H:%M')"
-          committer_name: Github‑Action
-          committer_email: action@github.com
+          path: ./pages
+
+  deploy:
+    needs: check-api
+    runs-on: ubuntu‑latest
+    environment:
+      name: github‑pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 部署到 GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,14 +1,14 @@
-name: 点播源API可用性测速
+name: 点播源API可用性测速(按延迟升序)
 on:
   schedule:
-    # cron UTC时间: 北京时间周六0点 = UTC周五16点
+    # UTC周五16点 = 北京时间周六 00:00
     - cron: '0 16 * * 5'
   workflow_dispatch:
 
 jobs:
   check-api:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: 检出仓库代码
         uses: actions/checkout@v4
@@ -16,14 +16,13 @@ jobs:
       - name: 安装工具 jq curl
         run: sudo apt update && sudo apt install -y jq curl
 
-      - name: API测速处理
+      - name: API测速+采集延迟+按延迟升序排序
         run: |
           INPUT="VODCMSXML.json"
           OUTPUT="VODCMSXML-YZ.json"
           TMP_VALID=valid.tmp.jsonl
           rm -f "$TMP_VALID" "$OUTPUT"
 
-          # 读取顶层数组每一个对象
           total=$(jq 'length' "$INPUT")
           echo "总源数量: $total"
 
@@ -32,33 +31,37 @@ jobs:
               src_name=$(echo "$item" | jq -r '.name')
               src_id=$(echo "$item" | jq -r '.id')
 
-              # api为空直接跳过
               if [[ -z "$api_url" || "$api_url" == "null" ]];then
                 echo "⚠️ id:${src_id} ${src_name} api链接为空，跳过"
                 continue
               fi
 
-              # curl测速：HEAD请求，超时5s；200/301/302视为可用
-              resp_code=$(curl -s -I -m 5 -o /dev/null -w "%{http_code}" "$api_url" || true)
+              # 获取http_code + 总耗时毫秒
+              result=$(curl -s -X GET -m 5 -o /dev/null -w "%{http_code} %{time_total}" "$api_url" || echo "000 5.0")
+              resp_code=$(echo "$result" | awk '{print $1}')
+              time_total=$(echo "$result" | awk '{print $2}')
+              latency_ms=$(awk -v t="$time_total" 'BEGIN{printf "%.0f", t*1000}')
+
               if [[ "$resp_code" =~ ^(200|301|302)$ ]];then
-                echo "✅ [OK] id:${src_id} ${src_name} | ${api_url}"
-                echo "$item" >> "$TMP_VALID"
+                echo "✅ [OK] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
+                # 追加 latency_ms 字段，输出json行
+                echo "$item" | jq --argjson lat "$latency_ms" '. + {latency_ms: $lat}' >> "$TMP_VALID"
               else
-                echo "❌ [FAIL] id:${src_id} ${src_name} | code=${resp_code} ${api_url}"
+                echo "❌ [FAIL] id:${src_id} ${src_name} code=${resp_code} latency:${latency_ms}ms"
               fi
           done
 
-          # 将每行json对象重新组装成顶层数组，保持和原文件完全相同格式
-          jq -s '.' "$TMP_VALID" > "$OUTPUT"
+          # 组装数组，按 latency_ms 升序排序（延迟小排在前面）
+          jq -s 'sort_by(.latency_ms)' "$TMP_VALID" > "$OUTPUT"
           rm -f "$TMP_VALID"
 
           valid_count=$(jq 'length' "$OUTPUT")
-          echo "测速完成，可用源数量: ${valid_count}，输出文件: ${OUTPUT}"
+          echo "测速完成，可用源数量: ${valid_count}，已按延迟升序排序，输出: ${OUTPUT}"
 
       - name: 提交更新结果文件
         uses: EndBug/add-and-commit@v9
         with:
           add: VODCMSXML-YZ.json
-          message: "🤖自动测速更新VODCMSXML-YZ.json $(date '+%Y-%m-%d %H:%M')"
+          message: "🤖测速+按延迟升序更新VODCMSXML-YZ.json $(date '+%Y-%m-%d %H:%M')"
           committer_name: Github‑Action
           committer_email: action@github.com

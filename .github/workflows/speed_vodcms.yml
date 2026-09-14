@@ -1,41 +1,81 @@
-name: VODCMS Build
-
+name: ZY‑Player风格点播源测速(按延迟升序)
 on:
-  push:
-    branches:
-      - main
+  schedule:
+    # UTC周五16点 = 北京时间周六00:00
+    - cron: '0 16 * * 5'
   workflow_dispatch:
 
-#concurrency:
-#  group: pages
-#  cancel-in-progress: true
-
 jobs:
-  check:
+  check-api:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
-      - name: Checkout code
+      - name: 检出仓库代码
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: 安装工具 jq curl
+        run: sudo apt update && sudo apt install -y jq curl libxml2-utils
 
-      - name: Install dependencies
+      - name: ZY‑Player逻辑测速，校验内容有效性，采集延迟排序
         run: |
-          python -m pip install --upgrade pip
-          pip install requests aiohttp
-
-      - name: Run generate script
-        run: python main.py
-
-      - name: Commit & push generated json
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add VODCMSXML-YZ.json
-          git diff --quiet && git diff --staged --quiet || git commit -m "auto update json"
-          git push
+          INPUT="VODCMSXML.json"
+          OUTPUT="VODCMSXML-YZ.json"
+          TMP_VALID=valid.tmp.jsonl
+          RESP_TMP=resp.tmp.raw
+          rm -f "$TMP_VALID" "$OUTPUT" "$RESP_TMP"
+          total=$(jq 'length' "$INPUT")
+          echo "【ZY‑Player模拟测速】总源数量: $total"
+          jq -c '.[]' "$INPUT" | while read -r item; do
+              api_url=$(echo "$item" | jq -r '.api')
+              src_name=$(echo "$item" | jq -r '.name')
+              src_id=$(echo "$item" | jq -r '.id')
+              rm -f "$RESP_TMP"
+              if [[ -z "$api_url" || "$api_url" == "null" ]];then
+                echo "⚠️ id:${src_id} ${src_name} api链接为空，跳过"
+                continue
+              fi
+              # GET请求、跟随重定向、5s超时，保存完整响应体
+              result=$(curl -s -X GET -L -m 5 -o "$RESP_TMP" -w "%{http_code} %{time_total}" "$api_url" || echo "000 5.0")
+              resp_code=$(echo "$result" | awk '{print $1}')
+              time_total=$(echo "$result" | awk '{print $2}')
+              latency_ms=$(awk -v t="$time_total" 'BEGIN{printf "%.0f", t*1000}')
+              # 网络层失败
+              if [[ "$resp_code" == "000" ]];then
+                echo "❌[网络失败] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
+                continue
+              fi
+              if [[ ! "$resp_code" =~ ^(200|301|302)$ ]];then
+                echo "❌[HTTP异常 ${resp_code}] id:${src_id} ${src_name} latency:${latency_ms}ms"
+                continue
+              fi
+              # 返回HTML页面直接判定解析失败（风控、验证码、网页）
+              if grep -iq "<html" "$RESP_TMP";then
+                echo "❌[解析失败：返回HTML风控页面] id:${src_id} ${src_name} latency:${latency_ms}ms"
+                continue
+              fi
+              # 不依赖MIME，优先尝试XML，失败尝试JSON，任一解析成功即有效
+              is_valid_content=0
+              if xmllint --noout "$RESP_TMP" 2>/dev/null;then
+                  is_valid_content=1
+              elif jq empty "$RESP_TMP" 2>/dev/null;then
+                  is_valid_content=1
+              fi
+              if [[ $is_valid_content -eq 1 ]];then
+                echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
+                echo "$item" | jq --argjson lat "$latency_ms" '. + {latency_ms: $lat}' >> "$TMP_VALID"
+              else
+                echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
+              fi
+          done
+          # 按延迟升序排序，移除临时latency_ms字段
+          jq -s 'sort_by(.latency_ms) | map(del(.latency_ms))' "$TMP_VALID" > "$OUTPUT"
+          rm -f "$TMP_VALID" "$RESP_TMP"
+          valid_count=$(jq 'length' "$OUTPUT")
+          echo "测速结束，可用源数量: ${valid_count}，输出文件：${OUTPUT}"
+      - name: 提交更新结果文件
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: VODCMSXML-YZ.json
+          message: "🤖ZY‑Player风格测速更新VODCMSXML‑YZ.json $(date '+%Y‑%m‑%d %H:%M')"
+          committer_name: Github‑Action
+          committer_email: action@github.com

@@ -11,7 +11,7 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: 检出仓库代码
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: 安装工具 jq curl
         run: sudo apt update && sudo apt install -y jq curl libxml2-utils

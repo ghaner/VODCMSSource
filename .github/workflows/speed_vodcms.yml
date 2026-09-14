@@ -1,0 +1,45 @@
+import json
+import requests
+
+# ====================== 配置项 ======================
+INPUT_FILE = "VODCMSXML.json"
+OUTPUT_FILE = "VODCMSXML-YZ.json"
+TIMEOUT = 3       # 单个链接超时秒数
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+# ====================================================
+
+def test_url(url: str) -> bool:
+    """链接测速探测，返回True=成功"""
+    try:
+        # HEAD请求减少流量，部分源不支持HEAD时改为 requests.get
+        resp = requests.head(url, timeout=TIMEOUT, headers=HEADERS, allow_redirects=True)
+        return resp.status_code < 400
+    except Exception:
+        return False
+
+if __name__ == "__main__":
+    with open(INPUT_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    valid_data = []
+    total = len(data)
+    ok_cnt = 0
+
+    for idx, item in enumerate(data):
+        name = item.get("name", "")
+        url = item.get("url", "")
+        if not url:
+            continue
+        print(f"[{idx+1}/{total}] 测试：{name} -> {url}")
+        if test_url(url):
+            valid_data.append(item)
+            ok_cnt += 1
+            print(f"✅ 成功")
+        else:
+            print(f"❌ 失败")
+
+    print(f"\n测速完成：总计 {total} 条，有效 {ok_cnt} 条")
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        json.dump(valid_data, f, ensure_ascii=False, indent=2)

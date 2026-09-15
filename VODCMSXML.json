@@ -2611,4 +2611,40 @@
     "isActive": true,
     "reverseOrder": false
   }
+  {
+    "key": "dJeNg5",
+    "id": 65,
+    "name": "巨量",
+    "api": "https://api.juliang.live/api/provide/vod/at/xml/",
+    "download": "",
+    "jiexiUrl": "",
+    "group": "云播",
+    "isActive": true,
+    "reverseOrder": false,
+    "status": "可用"
+  },
+  {
+    "key": "oEWTfK",
+    "id": 66,
+    "name": "巨量智能",
+    "api": "https://api.juliang.live/api/provide/vod/from/jlm3u8/at/xml/",
+    "download": "",
+    "jiexiUrl": "",
+    "group": "云播",
+    "isActive": true,
+    "reverseOrder": false,
+    "status": "可用"
+  },
+  {
+    "key": "ECgnUW",
+    "id": 67,
+    "name": "巨量播放器",
+    "api": "https://api.juliang.live/api/provide/vod/from/jlplayer/at/xml/",
+    "download": "",
+    "jiexiUrl": "",
+    "group": "云播",
+    "isActive": true,
+    "reverseOrder": false,
+    "status": "可用"
+  }
 ]

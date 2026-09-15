@@ -243,7 +243,7 @@
   {
     "key": "unQegX",
     "id": 22,
-    "name": "魔都",
+    "name": "魔都moduapi",
     "api": "https://caiji.moduapi.cc/api.php/provide/vod/at/xml/",
     "download": "",
     "jiexiUrl": "",
@@ -252,6 +252,18 @@
     "reverseOrder": false,
     "status": "可用"
   },
+  {
+    "key": "unQegX",
+    "id": 22,
+    "name": "魔都mdzyapi",
+    "api": "https://www.mdzyapi.com/api.php/provide/vod/at/xml/",
+    "download": "",
+    "jiexiUrl": "",
+    "group": "云播",
+    "isActive": true,
+    "reverseOrder": false,
+    "status": "可用"
+  },  
   {
     "key": "4JTUwG",
     "id": 23,

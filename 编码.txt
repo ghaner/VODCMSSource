@@ -1,0 +1,7 @@
+每周六零点定时执行以下任务
+按照https://github.com/hunlongyu/zy-player里的测速模式对VODCMSXML.json里面数组里api后面双引号里面所有的http或https链接进行测速
+测速成功的链接所在的点播源数组按照测速延迟升序排列，覆盖输出到VODCMSXML-YZ.json
+输出VODCMSXML-YZ.json
+保持VODCMSXML.json格式
+"id": 的值为升序排列的序号
+统一将"isActive":的值设置为true，将"status":的值设置为"可用"

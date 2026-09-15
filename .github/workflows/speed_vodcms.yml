@@ -59,14 +59,13 @@ jobs:
               fi
               if [[ $is_valid_content -eq 1 ]];then
                 echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
-                # 关键修改：增加 isActive:true  status:"可用"
                 echo "$item" | jq --argjson lat "$latency_ms" '. + {latency_ms: $lat, isActive:true, status:"可用"}' >> "$TMP_VALID"
               else
                 echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
               fi
           done
-          # 按延迟升序排序，移除临时latency_ms字段
-          jq -s 'sort_by(.latency_ms) | map(del(.latency_ms))' "$TMP_VALID" > "$OUTPUT"
+          # 按延迟升序排序 → 删除临时latency_ms → 根据数组位置重写id从1开始升序序号
+          jq -s 'sort_by(.latency_ms) | map(del(.latency_ms)) | to_entries | map(.value + {id:(.key+1)})' "$TMP_VALID" > "$OUTPUT"
           rm -f "$TMP_VALID" "$RESP_TMP"
           valid_count=$(jq 'length' "$OUTPUT")
           echo "测速结束，可用源数量: ${valid_count}，输出文件：${OUTPUT}"

@@ -16,13 +16,23 @@ jobs:
       - name: ZY‑Player逻辑测速，校验内容有效性，采集延迟排序
         run: |
           INPUT="VODCMSXML.json"
+          INPUT_DEDUP="VODCMSXML-dedup.tmp.json"
           OUTPUT="VODCMSXML-YZ.json"
           TMP_VALID=valid.tmp.jsonl
           RESP_TMP=resp.tmp.raw
-          rm -f "$TMP_VALID" "$OUTPUT" "$RESP_TMP"
-          total=$(jq 'length' "$INPUT")
-          echo "【ZY‑Player模拟测速】总源数量: $total"
-          jq -c '.[]' "$INPUT" | while read -r item; do
+          rm -f "$TMP_VALID" "$OUTPUT" "$RESP_TMP" "$INPUT_DEDUP"
+
+          # 按api字段去重，保留数组中首次出现的条目
+          jq '
+            reduce .[] as $item (
+              [];
+              if any(.[]; .api == $item.api) then . else . + [$item] end
+            )
+          ' "$INPUT" > "$INPUT_DEDUP"
+
+          total=$(jq 'length' "$INPUT_DEDUP")
+          echo "【ZY‑Player模拟测速】总源数量(去重后): $total"
+          jq -c '.[]' "$INPUT_DEDUP" | while read -r item; do
               api_url=$(echo "$item" | jq -r '.api')
               src_name=$(echo "$item" | jq -r '.name')
               src_id=$(echo "$item" | jq -r '.id')
@@ -66,7 +76,7 @@ jobs:
           done
           # 按延迟升序排序 → 删除临时latency_ms → 根据数组位置重写id从1开始升序序号
           jq -s 'sort_by(.latency_ms) | map(del(.latency_ms)) | to_entries | map(.value + {id:(.key+1)})' "$TMP_VALID" > "$OUTPUT"
-          rm -f "$TMP_VALID" "$RESP_TMP"
+          rm -f "$TMP_VALID" "$RESP_TMP" "$INPUT_DEDUP"
           valid_count=$(jq 'length' "$OUTPUT")
           echo "测速结束，可用源数量: ${valid_count}，输出文件：${OUTPUT}"
       - name: 提交更新结果文件

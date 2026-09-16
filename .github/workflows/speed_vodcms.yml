@@ -74,8 +74,22 @@ jobs:
                 echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
               fi
           done
-          # 按延迟升序排序 → 删除临时latency_ms → 根据数组位置重写id从1开始升序序号
-          jq -s 'sort_by(.latency_ms) | map(del(.latency_ms)) | to_entries | map(.value + {id:(.key+1)})' "$TMP_VALID" > "$OUTPUT"
+          # 组装输出逻辑：
+          # 1.全部可用源数组；2.筛选group=="云播"，取延迟最小1条；3.剩下所有源按latency_ms升序；4.拼接 [最小云播] + [其余全部升序]
+          # 若无云播源，则直接全部按延迟升序；之后删除latency_ms，重写id从1开始
+          jq -s '
+            . as $all
+            | ($all | map(select(.group=="云播")) | sort_by(.latency_ms) | first) as $minYunbo
+            | if $minYunbo != null then
+                ( [$minYunbo] + ($all | map(select(. != $minYunbo)) | sort_by(.latency_ms)) )
+              else
+                ($all | sort_by(.latency_ms))
+              end
+            | map(del(.latency_ms))
+            | to_entries
+            | map(.value + {id:(.key+1)})
+          ' "$TMP_VALID" > "$OUTPUT"
+
           rm -f "$TMP_VALID" "$RESP_TMP" "$INPUT_DEDUP"
           valid_count=$(jq 'length' "$OUTPUT")
           echo "测速结束，可用源数量: ${valid_count}，输出文件：${OUTPUT}"

@@ -4,6 +4,7 @@ on:
     # UTC周五16点 = 北京时间周六00:00
     - cron: '0 16 * * 5'
   workflow_dispatch:
+
 jobs:
   check-api:
     runs-on: ubuntu-latest
@@ -11,8 +12,12 @@ jobs:
     steps:
       - name: 检出仓库代码
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
       - name: 安装工具 jq curl
         run: sudo apt update && sudo apt install -y jq curl libxml2-utils
+
       - name: ZY‑Player逻辑测速，校验内容有效性，采集延迟排序
         run: |
           INPUT="VODCMSXML.json"
@@ -32,20 +37,24 @@ jobs:
 
           total=$(jq 'length' "$INPUT_DEDUP")
           echo "【ZY‑Player模拟测速】总源数量(去重后): $total"
+
           jq -c '.[]' "$INPUT_DEDUP" | while read -r item; do
               api_url=$(echo "$item" | jq -r '.api')
               src_name=$(echo "$item" | jq -r '.name')
               src_id=$(echo "$item" | jq -r '.id')
               rm -f "$RESP_TMP"
+
               if [[ -z "$api_url" || "$api_url" == "null" ]];then
                 echo "⚠️ id:${src_id} ${src_name} api链接为空，跳过"
                 continue
               fi
+
               # GET请求、跟随重定向、5s超时，保存完整响应体
               result=$(curl -s -X GET -L -m 5 -o "$RESP_TMP" -w "%{http_code} %{time_total}" "$api_url" || echo "000 5.0")
               resp_code=$(echo "$result" | awk '{print $1}')
               time_total=$(echo "$result" | awk '{print $2}')
               latency_ms=$(awk -v t="$time_total" 'BEGIN{printf "%.0f", t*1000}')
+
               # 网络层失败
               if [[ "$resp_code" == "000" ]];then
                 echo "❌[网络失败] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
@@ -55,11 +64,13 @@ jobs:
                 echo "❌[HTTP异常 ${resp_code}] id:${src_id} ${src_name} latency:${latency_ms}ms"
                 continue
               fi
+
               # 返回HTML页面直接判定解析失败（风控、验证码、网页）
               if grep -iq "<html" "$RESP_TMP";then
                 echo "❌[解析失败：返回HTML风控页面] id:${src_id} ${src_name} latency:${latency_ms}ms"
                 continue
               fi
+
               # 不依赖MIME，优先尝试XML，失败尝试JSON，任一解析成功即有效
               is_valid_content=0
               if xmllint --noout "$RESP_TMP" 2>/dev/null;then
@@ -67,24 +78,31 @@ jobs:
               elif jq empty "$RESP_TMP" 2>/dev/null;then
                   is_valid_content=1
               fi
+
               if [[ $is_valid_content -eq 1 ]];then
                 echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
-                # 提取host，分割域名，取倒数第2段（去掉后缀）存入domain2
+                # 提取二级域名主体；格式化 name = "原名称‑二级域名主体"
                 echo "$item" | jq --argjson lat "$latency_ms" '
                 def getSecondDomainBody:
                   (.api | capture("^https?://(?<host>[^/]+)") | .host // null) as $h
                   | if $h == null then null
                     else ($h | split(".") | if length >=2 then .[-2] else $h end)
                     end;
-                  . + {latency_ms: $lat, isActive:true, status:"可用", domain2:getSecondDomainBody}
+                (. as $o | getSecondDomainBody as $d2
+                | . + {
+                    latency_ms: $lat,
+                    isActive:true,
+                    status:"可用",
+                    name: ($o.name + "-" + ($d2 // "unknown"))
+                  })
                 ' >> "$TMP_VALID"
               else
                 echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
               fi
           done
+
           # 组装输出逻辑：
-          # 1.全部可用源数组；2.筛选group=="云播"，取延迟最小1条；3.剩下所有源按latency_ms升序；4.拼接 [最小云播] + [其余全部升序]
-          # 若无云播源，则直接全部按延迟升序；之后删除latency_ms，重写id从1开始
+          # 1.全部可用源数组；2.筛选group=="云播"，取延迟最小1条置顶；3.剩下所有源按latency_ms升序；4.全局重新分配id从1开始
           jq -s '
             . as $all
             | ($all | map(select(.group=="云播")) | sort_by(.latency_ms) | first) as $minYunbo
@@ -101,6 +119,7 @@ jobs:
           rm -f "$TMP_VALID" "$RESP_TMP" "$INPUT_DEDUP"
           valid_count=$(jq 'length' "$OUTPUT")
           echo "测速结束，可用源数量: ${valid_count}，输出文件：${OUTPUT}"
+
       - name: 提交更新结果文件
         uses: EndBug/add-and-commit@v11
         with:
@@ -108,3 +127,4 @@ jobs:
           message: "🤖ZY‑Player风格测速更新VODCMSXML‑YZ.json $(date '+%Y‑%m‑%d %H:%M')"
           committer_name: Github‑Action
           committer_email: action@github.com
+          pull: true

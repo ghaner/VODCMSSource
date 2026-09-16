@@ -69,7 +69,15 @@ jobs:
               fi
               if [[ $is_valid_content -eq 1 ]];then
                 echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
-                echo "$item" | jq --argjson lat "$latency_ms" '. + {latency_ms: $lat, isActive:true, status:"可用"}' >> "$TMP_VALID"
+                # 提取host，分割域名，取倒数第2段（去掉后缀）存入domain2
+                echo "$item" | jq --argjson lat "$latency_ms" '
+                def getSecondDomainBody:
+                  (.api | capture("^https?://(?<host>[^/]+)") | .host // null) as $h
+                  | if $h == null then null
+                    else ($h | split(".") | if length >=2 then .[-2] else $h end)
+                    end;
+                  . + {latency_ms: $lat, isActive:true, status:"可用", domain2:getSecondDomainBody}
+                ' >> "$TMP_VALID"
               else
                 echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
               fi

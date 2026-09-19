@@ -15,54 +15,33 @@ jobs:
           fetch-depth: 0
       - name: 安装工具 jq curl libxml2-utils
         run: sudo apt update && sudo apt install -y jq curl libxml2-utils
-      - name: 2.1 输入模块｜api去重 + 同name不同api追加二级域名主体
+
+      - name: 2.1 VODCMSXML.json格式化｜api链接去重输出VODCMSXMLcs.json
         run: |
           INPUT_RAW="VODCMSXML.json"
-          TMP_DEDUP="mod_211_dedup.tmp.json"
-          TMP_INPUT_READY="mod_21_input_ready.tmp.json"
-          rm -f "$TMP_DEDUP" "$TMP_INPUT_READY"
-
-          # 2.1.1 api链接去重，保留数组中首次出现的条目
+          TMP_CS="VODCMSXMLcs.json"
+          rm -f "$TMP_CS"
+          # 2.1.1 api链接去重，保留数组首次出现条目，输出保持原格式到VODCMSXMLcs.json
           jq '
             reduce .[] as $item (
               [];
               if any(.[]; .api == $item.api) then . else . + [$item] end
             )
-          ' "$INPUT_RAW" > "$TMP_DEDUP"
+          ' "$INPUT_RAW" > "$TMP_CS"
+          total_input=$(jq 'length' "$TMP_CS")
+          echo "【2.1格式化完成】去重后源总数：${total_input}，输出临时文件：${TMP_CS}"
 
-          # 2.1.2 name相同、api不同 → name追加‑二级域名主体；name唯一保持原样
-          jq '
-            group_by(.name)
-            | map(
-                . as $grp
-                | ($grp | map(.api)|unique|length) as $apiCnt
-                | if $apiCnt <= 1 then
-                    $grp
-                  else
-                    $grp | map(
-                      (.api | type) as $t
-                      | if $t != "string" then .
-                      else
-                        (.api | capture("^https?://(?<host>[^/]+)") | .host // null) as $h
-                        | ($h | split(".") | if length >=2 then .[-2] else ($h//"unknown") end) as $d2
-                        | .name = "\(.name)-\($d2)"
-                      end
-                    )
-                  end
-              )
-            | flatten
-          ' "$TMP_DEDUP" > "$TMP_INPUT_READY"
-
-          total_input=$(jq 'length' "$TMP_INPUT_READY")
-          echo "【2.1输入模块完成】处理后源总数：${total_input}"
-      - name: 2.2 测速模块｜http请求、内容校验，采集latency_ms
+      - name: 2.2 测速模块｜读取VODCMSXMLcs.json，测速成功输出VODCMSXMLyx.json
         run: |
-          TMP_INPUT_READY="mod_21_input_ready.tmp.json"
-          TMP_SPEED_OUT="mod_22_speed_out.tmp.jsonl"
+          TMP_CS="VODCMSXMLcs.json"
+          TMP_YX_RAW="VODCMSXMLyx.json"
           RESP_TMP="resp.tmp.raw"
-          rm -f "$TMP_SPEED_OUT" "$RESP_TMP"
+          rm -f "$TMP_YX_RAW" "$RESP_TMP"
+          # 输出json数组开头
+          echo "[" > "$TMP_YX_RAW"
+          first_item=1
 
-          jq -c '.[]' "$TMP_INPUT_READY" | while read -r item; do
+          jq -c '.[]' "$TMP_CS" | while read -r item; do
               api_url=$(echo "$item" | jq -r '.api')
               src_name=$(echo "$item" | jq -r '.name')
               src_id=$(echo "$item" | jq -r '.id')
@@ -99,46 +78,77 @@ jobs:
               fi
               if [[ $is_valid_content -eq 1 ]];then
                 echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
-                # 只附加测速延迟；name已经在输入模块处理完毕，不修改name
-                echo "$item" | jq --argjson lat "$latency_ms" '. + {latency_ms:$lat}' >> "$TMP_SPEED_OUT"
+                # 追加latency_ms字段，写入VODCMSXMLyx.json数组
+                if [[ $first_item -eq 0 ]]; then
+                  echo "," >> "$TMP_YX_RAW"
+                fi
+                echo "$item" | jq --argjson lat "$latency_ms" '. + {latency_ms:$lat}' >> "$TMP_YX_RAW"
+                first_item=0
               else
                 echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
               fi
           done
-          echo "【2.2测速模块完成】已输出可用源临时jsonl"
-      - name: 2.3测速结果处理 + 2.4输出模块｜排序、云播置顶、重分配id、输出VODCMSXML‑YZ.json
+          # 闭合json数组
+          echo "]" >> "$TMP_YX_RAW"
+          valid_raw=$(jq 'length' "$TMP_YX_RAW")
+          echo "【2.2测速模块完成】测速成功源数量：${valid_raw}，临时输出：${TMP_YX_RAW}"
+
+      - name: 2.3 测速结果处理｜重命名name、排序、分配id、字段赋值，输出VODCMSXML‑YZ.json
         run: |
-          TMP_SPEED_OUT="mod_22_speed_out.tmp.jsonl"
+          TMP_YX_RAW="VODCMSXMLyx.json"
           OUTPUT="VODCMSXML-YZ.json"
           rm -f "$OUTPUT"
-
-          jq -s '
-            # 读入全部测速成功源
-            . as $allValid
-            # 筛选云播分组，按延迟升序
-            | ($allValid | map(select(.group=="云播")) | sort_by(.latency_ms)) as $yunSorted
-            | if ($yunSorted | length) > 0 then
-                # 云播最小延迟放第一位，剩余全部源按latency_ms升序
-                [$yunSorted[0]] + ($allValid | map(select(.id != $yunSorted[0].id)) | sort_by(.latency_ms))
+          jq '
+            . as $all
+            # 2.3.1 整体先按测速延迟升序排列
+            | sort_by(.latency_ms)
+            # 2.3.2 name相同api不同 → name追加二级域名主体(不带后缀)
+            | group_by(.name)
+            | map(
+                . as $grp
+                | ($grp | map(.api)|unique|length) as $apiCnt
+                | if $apiCnt <= 1 then
+                    $grp
+                  else
+                    $grp | map(
+                      (.api | type) as $t
+                      | if $t != "string" then .
+                      else
+                        (.api | capture("^https?://(?<host>[^/]+)") | .host // null) as $h
+                        | ($h | split(".") ) as $parts
+                        # 提取二级域名主体，去掉后缀；不足则为unknown
+                        | ($parts | length >=2 ? $parts[-2] : "unknown") as $secHost
+                        | .name = "\(.name)-\($secHost)"
+                      end
+                    )
+                  end
+              )
+            | flatten
+            # 2.3.3：云播group取延迟最小，设置id=1；其余按延迟升序序号+1
+            | ( map(select(.group=="云播")) | if length>0 then sort_by(.latency_ms)[0] else null end ) as $yunMinItem
+            | . as $afterRename
+            | if ($yunMinItem != null) then
+                # 把云播最小延迟项放数组首位
+                [$yunMinItem] + ($afterRename | map(select(.id != $yunMinItem.id)))
               else
-                ($allValid | sort_by(.latency_ms))
+                $afterRename
               end
-            # 2.4.4 2.4.5 统一设置字段；删除测速临时latency_ms
+            # 2.3.4 2.3.5 统一字段
             | map(
                 .isActive = true
                 | .status = "可用"
                 | del(.latency_ms)
               )
-            # 2.4.3：数组顺序就是最终顺序；索引key从0开始 → id = key+1；云播最小延迟处在数组第0位 → id=1
+            # 重分配id，数组索引从0开始 → id = key+1；云播最小项在0位自动得到id=1
             | to_entries
             | map(.value + {id:(.key + 1)})
-          ' "$TMP_SPEED_OUT" > "$OUTPUT"
+          ' "$TMP_YX_RAW" > "$OUTPUT"
 
-          valid_count=$(jq 'length' "$OUTPUT")
-          echo "【2.3+2.4处理输出完成】可用源数量: ${valid_count}，输出文件：${OUTPUT}"
+          final_count=$(jq 'length' "$OUTPUT")
+          echo "【2.3结果处理完成】最终可用源数量: ${final_count}，输出：${OUTPUT}"
+          # 清理临时文件
+          rm -f VODCMSXMLcs.json VODCMSXMLyx.json resp.tmp.raw
 
-          # 清理全部模块临时文件
-          rm -f mod_211_dedup.tmp.json mod_21_input_ready.tmp.json mod_22_speed_out.tmp.jsonl resp.tmp.raw
       - name: 提交更新结果文件
         uses: EndBug/add-and-commit@v11
         with:

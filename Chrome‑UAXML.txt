@@ -1,0 +1,5 @@
+#Chrome‑UA测速名单：需要浏览器UA才能正常返回XML的点播API
+#一行一条完整原始API，字符必须与VODCMSXML.json的api完全一致
+#艾旦
+https://lovedan.net/api.php/provide/vod/at/xml/
+https://lovedan.net/api.php/provide/vod/at/xml

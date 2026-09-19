@@ -21,9 +21,8 @@ jobs:
           TMP_CS="VODCMSXMLcs.json"
           rm -f "$TMP_CS"
           jq '
-            # 归一化api：移除url末尾多余斜杠，消除末尾 / 和无/ 的字符串差异，用于正确去重
-            map(.api |= ( if type=="string" then sub("/+$";"") else . end ))
-            | reduce .[] as $item (
+            # 不再移除api末尾斜杠，保留原始url原样；直接按原始api精确去重
+            reduce .[] as $item (
               [];
               if any(.[]; .api == $item.api) then . else . + [$item] end
             )
@@ -36,6 +35,29 @@ jobs:
           TMP_JSONL="speed_ok.tmp.jsonl"
           TMP_YX_RAW="VODCMSXMLyx.json"
           RESP_TMP="resp.tmp.raw"
+          WHITELIST_FILE="./Chrome‑UAXML.txt"
+          CHROME_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+
+          # 加载Chrome‑UAXML.txt白名单，过滤注释、空行存入数组
+          WHITELIST_API=()
+          if [[ -f "${WHITELIST_FILE}" ]];then
+            while IFS= read -r line; do
+              [[ -z "$line" || "$line" =~ ^# ]] && continue
+              WHITELIST_API+=("$line")
+            done < "${WHITELIST_FILE}"
+          fi
+
+          # 判断api是否命中白名单函数
+          is_in_whitelist(){
+            local target="$1"
+            for item in "${WHITELIST_API[@]}";do
+              if [[ "${item}" == "${target}" ]];then
+                return 0
+              fi
+            done
+            return 1
+          }
+
           rm -f "$TMP_JSONL" "$TMP_YX_RAW" "$RESP_TMP"
           jq -c '.[]' "$TMP_CS" | while read -r item; do
               api_url=$(echo "$item" | jq -r '.api')
@@ -46,8 +68,16 @@ jobs:
                 echo "⚠️ id:${src_id} ${src_name} api链接为空，跳过"
                 continue
               fi
-              # GET请求、跟随重定向、5s超时，保存完整响应体
-              result=$(curl -s -X GET -L -m 5 -o "$RESP_TMP" -w "%{http_code} %{time_total}" "$api_url" || echo "000 5.0")
+
+              # 组装curl参数
+              curl_args=()
+              curl_args+=("-s" "-X" "GET" "-L" "-m" "5" "-o" "$RESP_TMP" "-w" "%{http_code} %{time_total}")
+              if is_in_whitelist "${api_url}";then
+                curl_args+=("-A" "$CHROME_UA")
+                echo "ℹ️ id:${src_id} ${src_name} api命中Chrome‑UAXML白名单，使用Chrome‑UA测速"
+              fi
+
+              result=$(curl "${curl_args[@]}" "$api_url" || echo "000 5.0")
               resp_code=$(echo "$result" | awk '{print $1}')
               time_total=$(echo "$result" | awk '{print $2}')
               latency_ms=$(awk -v t="$time_total" 'BEGIN{printf "%.0f", t*1000}')

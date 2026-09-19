@@ -3266,7 +3266,7 @@
     "key": "oH0HFI",
     "id": 273,
     "name": "麒麟",
-    "api": "http://www.qilinzyz.com/api.php/provide/vod/at/xml/",
+    "api": "https://www.qilinzyz.com/api.php/provide/vod/at/xml/",
     "download": "",
     "jiexiUrl": "",
     "group": "云播",

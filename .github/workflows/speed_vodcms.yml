@@ -36,7 +36,11 @@ jobs:
           TMP_JSONL="speed_ok.tmp.jsonl"
           TMP_YX_RAW="VODCMSXMLyx.json"
           RESP_TMP="resp.tmp.raw"
-          rm -f "$TMP_JSONL" "$TMP_YX_RAW" "$RESP_TMP"
+          # 临时失败域名文件，留给2.4模块使用
+          FAIL_TXT="fail.txt"
+          rm -f "$TMP_JSONL" "$TMP_YX_RAW" "$RESP_TMP" "$FAIL_TXT"
+          touch "$FAIL_TXT"
+
           jq -c '.[]' "$TMP_CS" | while read -r item; do
               api_url=$(echo "$item" | jq -r '.api')
               src_name=$(echo "$item" | jq -r '.name')
@@ -46,23 +50,31 @@ jobs:
                 echo "⚠️ id:${src_id} ${src_name} api链接为空，跳过"
                 continue
               fi
+              # 提取api链接前置部分：协议+域名
+              pre_api_part=$(echo "$api_url" | sed -E 's|^(https?://[^/]+).*$|\1|')
+
               # GET请求、跟随重定向、5s超时，保存完整响应体
               result=$(curl -s -X GET -L -m 5 -o "$RESP_TMP" -w "%{http_code} %{time_total}" "$api_url" || echo "000 5.0")
               resp_code=$(echo "$result" | awk '{print $1}')
               time_total=$(echo "$result" | awk '{print $2}')
               latency_ms=$(awk -v t="$time_total" 'BEGIN{printf "%.0f", t*1000}')
+
+              # --------测速失败场景，写入fail.txt--------
               # 网络层失败
               if [[ "$resp_code" == "000" ]];then
                 echo "❌[网络失败] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
+                echo "${pre_api_part}" >> "${FAIL_TXT}"
                 continue
               fi
               if [[ ! "$resp_code" =~ ^(200|301|302)$ ]];then
                 echo "❌[HTTP异常 ${resp_code}] id:${src_id} ${src_name} latency:${latency_ms}ms"
+                echo "${pre_api_part}" >> "${FAIL_TXT}"
                 continue
               fi
               # 返回HTML页面直接判定解析失败（风控、验证码、网页）
               if grep -iq "<html" "$RESP_TMP";then
                 echo "❌[解析失败：返回HTML风控页面] id:${src_id} ${src_name} latency:${latency_ms}ms"
+                echo "${pre_api_part}" >> "${FAIL_TXT}"
                 continue
               fi
               # 不依赖MIME，优先尝试XML，失败尝试JSON，任一解析成功即有效
@@ -78,36 +90,33 @@ jobs:
                 echo "$item" | jq -c --argjson lat "$latency_ms" '. + {latency_ms:$lat}' >> "$TMP_JSONL"
               else
                 echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
+                echo "${pre_api_part}" >> "${FAIL_TXT}"
               fi
           done
           # jsonl转标准JSON数组，输出VODCMSXMLyx.json，结构与VODCMSXML.json完全一致
           jq -s '.' "$TMP_JSONL" > "$TMP_YX_RAW"
           valid_raw=$(jq 'length' "$TMP_YX_RAW")
-          echo "【2.2测速模块完成】测速成功源数量：${valid_raw}，临时输出：${TMP_YX_RAW}"
+          fail_lines=$(wc -l < "$FAIL_TXT")
+          echo "【2.2测速模块完成】测速成功源数量：${valid_raw}；测速失败域名写入临时fail.txt，失败记录行数：${fail_lines}"
           rm -f "$TMP_JSONL"
-
       - name: 2.2‑extra 白名单源直接加入结果集，置于排序末尾
         run: |
           TMP_RAW="VODCMSXML.json"
           OUT_MAIN="VODCMSXMLyx.json"
           CHROME_TMP_JSONL="chrome_ok.tmp.jsonl"
           WHITELIST_FILE="./Chrome‑UAXML.txt"
-
           rm -f "${CHROME_TMP_JSONL}"
           touch "${CHROME_TMP_JSONL}"
-
           if [[ ! -f "${WHITELIST_FILE}" ]];then
             echo "ℹ️ Chrome‑UAXML.txt 文件不存在，跳过白名单追加"
             exit 0
           fi
-
           WHITELIST_API=()
           while IFS= read -r line; do
             [[ -z "$line" || "$line" =~ ^# ]] && continue
             clean_line=$(echo "$line" | sed 's:/*$::')
             WHITELIST_API+=("$clean_line")
           done < "${WHITELIST_FILE}"
-
           for target_api in "${WHITELIST_API[@]}"; do
             echo "🔍匹配白名单api: ${target_api}"
             jq -c --arg api "${target_api}" '
@@ -116,7 +125,6 @@ jobs:
               | . + {latency_ms: 99999}
             ' "${TMP_RAW}" >> "${CHROME_TMP_JSONL}"
           done
-
           if [[ -s "${CHROME_TMP_JSONL}" ]];then
             jq -s '.' "${CHROME_TMP_JSONL}" > tmp_whitelist.json
             jq -s '.[0] + .[1]' "${OUT_MAIN}" tmp_whitelist.json > tmp_merge.json
@@ -129,7 +137,6 @@ jobs:
             echo "ℹ️白名单无有效源，不做合并"
           fi
           rm -f "${CHROME_TMP_JSONL}"
-
       - name: 2.3 测速结果处理｜重命名name、排序、分配id、字段赋值，输出VODCMSXML‑YZ.json
         run: |
           TMP_YX_RAW="VODCMSXMLyx.json"
@@ -179,13 +186,75 @@ jobs:
           ' "$TMP_YX_RAW" > "$OUTPUT"
           final_count=$(jq 'length' "$OUTPUT")
           echo "【2.3结果处理完成】最终可用源数量: ${final_count}，输出：${OUTPUT}"
-          # 清理全部临时文件
+          # 注意：保留 fail.txt，供2.4模块使用，此处不删除！
           rm -f VODCMSXMLcs.json VODCMSXMLyx.json resp.tmp.raw
+      # ==========2.4模块：读取临时fail.txt，对里面链接测速，成功链接覆盖回sourcesurl.txt==========
+      - name: 2.4 读取fail.txt域名逐行测速，成功链接输出至仓库根目录sourcesurl.txt
+        run: |
+          FAIL_TXT="fail.txt"
+          SRC_FILE="./sourcesurl.txt"
+          TMP_RESP="su_resp.tmp.raw"
+          TMP_OK="sourcesurl_ok.tmp.tmp"
+          rm -f "$TMP_RESP" "$TMP_OK"
+          touch "$TMP_OK"
+
+          if [[ ! -f "${FAIL_TXT}" ]];then
+            echo "ℹ️临时文件fail.txt不存在，2.4跳过测速"
+            # 确保sourcesurl.txt存在
+            touch "${SRC_FILE}"
+            exit 0
+          fi
+
+          # 去重fail.txt内域名，避免重复测速
+          sort -u "${FAIL_TXT}" -o "${FAIL_TXT}"
+
+          while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            url=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+            [[ -z "$url" ]] && continue
+
+            rm -f "$TMP_RESP"
+            result=$(curl -s -X GET -L -m 5 -o "$TMP_RESP" -w "%{http_code} %{time_total}" "$url" || echo "000 5.0")
+            resp_code=$(echo "$result" | awk '{print $1}')
+
+            if [[ "$resp_code" == "000" ]];then
+              echo "❌2.4网络失败 ${url}"
+              continue
+            fi
+            if [[ ! "$resp_code" =~ ^(200|301|302)$ ]];then
+              echo "❌2.4 HTTP${resp_code} ${url}"
+              continue
+            fi
+            if grep -iq "<html" "$TMP_RESP";then
+              echo "❌2.4 返回HTML风控页面 ${url}"
+              continue
+            fi
+            valid=0
+            if xmllint --noout "$TMP_RESP" 2>/dev/null; then
+              valid=1
+            elif jq empty "$TMP_RESP" 2>/dev/null;then
+              valid=1
+            fi
+            if [[ ${valid} -eq 1 ]];then
+              echo "✅2.4测速成功 ${url}"
+              echo "${url}" >> "${TMP_OK}"
+            else
+              echo "❌2.4 非XML/JSON有效内容 ${url}"
+            fi
+          done < "${FAIL_TXT}"
+
+          # 测速成功链接覆盖回仓库根目录sourcesurl.txt
+          mv "${TMP_OK}" "${SRC_FILE}"
+          ok_num=$(wc -l < "${SRC_FILE}")
+          echo "【2.4测速完成】fail.txt中测速成功链接数量：${ok_num}，已写入sourcesurl.txt"
+
+          # 清理全部临时文件
+          rm -f "$TMP_RESP" "${FAIL_TXT}"
       - name: 提交更新结果文件
         uses: EndBug/add-and-commit@v11
         with:
-          add: VODCMSXML-YZ.json
-          message: "🤖ZY‑Player风格测速更新VODCMSXML‑YZ.json $(date '+%Y‑%m‑%d %H:%M')"
+          add: VODCMSXML-YZ.json sourcesurl.txt
+          message: "🤖ZY‑Player风格测速更新 $(date '+%Y‑%m‑%d %H:%M') VODCMSXML‑YZ.json sourcesurl.txt"
           committer_name: Github‑Action
           committer_email: action@github.com
           pull: true

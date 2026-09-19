@@ -177,13 +177,12 @@ jobs:
                 .
               end
             | to_entries
-            | map( .value + {id:(.key + 1)} | del(.latency_ms) )
+            | map( .value + {id:(.key+1)} | del(.latency_ms) )
           ' "$TMP_YX_RAW" > "$OUTPUT"
 
           final_count=$(jq 'length' "$OUTPUT")
           echo "【2.3结果处理完成】最终可用源数量: ${final_count}，输出：${OUTPUT}"
 
-          # 构建HTML，使用printf避免yaml heredoc冲突
           printf '%s\n' \
           '<!DOCTYPE html>' \
           '<html lang="zh-CN">' \
@@ -194,7 +193,6 @@ jobs:
           '<body>' \
           '<h3>测速失败站点（点击新窗口打开，人工查找新xml接口）</h3>' > "$HTML_OUT"
 
-          list_cnt=0
           if [[ -f "${FAIL_TXT}" && -s "${FAIL_TXT}" ]];then
             sort -u "${FAIL_TXT}" -o "${FAIL_TXT}"
             while IFS= read -r fail_domain; do
@@ -207,12 +205,12 @@ jobs:
                 | .name
               ' "${TMP_CS}" | sort -u | while read -r src_name;do
                 printf '<div><a href="%s" target="_blank">%s</a></div>\n' "${fail_domain}" "${src_name}" >> "$HTML_OUT"
-                list_cnt=$((list_cnt+1))
               done
             done < "${FAIL_TXT}"
           fi
 
           printf '%s\n' '</body>' '</html>' >> "$HTML_OUT"
+          list_cnt=$(grep -c '<div><a href' "${HTML_OUT}")
           echo "【2.3失败源HTML清单输出完成】条目数：${list_cnt}，输出 sources.html"
 
           rm -f VODCMSXMLcs.json VODCMSXMLyx.json resp.tmp.raw "${FAIL_TXT}"

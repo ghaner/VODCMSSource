@@ -10,7 +10,7 @@
 2.2.1 测速对象 临时文件VODCMSXMLcs.json中的api链接
 2.2.2 测速逻辑 与上传的speed_vodcms.yml一致
 2.2.3 测速成功的点播源与VODCMSXML.json格式一致输出至临时文件VODCMSXMLyx.json
-2.2.4 提取测速失败的点播源数组中api链接中的api前置部分（协议 + 域名）输出至临时文件fail.txt
+2.2.4 提取测速失败的点播源数组中api链接中的api前置部分（协议 + 域名）输出至临时文sources.html <div><a href="api之前的协议和域名" target="_blank">点播源名称</a></div>
 2.3 测速结果处理  
 2.3.1 VODCMSXMLyx.json中云播group中测速延迟最小的数组的id设定为1，所在数组置顶，其余所有点播源的数组顺序依次从上往下按照延迟升序排列，其id从2开始依次加1，
 2.3.2 VODCMSXMLyx.json中api链接不同name相同的点播源的name追加点播源api链接中的二级域名主体，格式化为：名称-二级域名主体（不要域名后缀）

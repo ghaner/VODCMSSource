@@ -134,15 +134,14 @@ jobs:
             echo "ℹ️白名单无有效源，不做合并"
           fi
           rm -f "${CHROME_TMP_JSONL}"
-      - name: 2.3 测速结果处理｜重命名name、排序、分配id、字段赋值，输出VODCMSXML‑YZ.json；输出失败源清单sourcesurl.txt
+      - name: 2.3 测速结果处理｜重命名name、排序、分配id、字段赋值，输出VODCMSXML‑YZ.json；输出失败源清单sources.html
         run: |
           TMP_YX_RAW="VODCMSXMLyx.json"
           OUTPUT="VODCMSXML-YZ.json"
           TMP_CS="VODCMSXMLcs.json"
           FAIL_TXT="fail.txt"
-          SRC_LIST="./sourcesurl.txt"
-          rm -f "$OUTPUT" "$SRC_LIST"
-          touch "$SRC_LIST"
+          HTML_OUT="./sources.html"
+          rm -f "$OUTPUT" "$HTML_OUT"
 
           jq '
             # 直接排序，不做任何api去重；缺失latency_ms默认99999垫底
@@ -190,7 +189,20 @@ jobs:
           final_count=$(jq 'length' "$OUTPUT")
           echo "【2.3结果处理完成】最终可用源数量: ${final_count}，输出：${OUTPUT}"
 
-          # ---- 把fail.txt域名去重，反向匹配原始源，输出 name | 域名 到 sourcesurl.txt ----
+          # 初始化html文档
+          cat > "$HTML_OUT" <<EOF
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>测速失败点播源清单</title>
+</head>
+<body>
+<h3>测速失败站点（点击新窗口打开，人工查找新xml接口）</h3>
+EOF
+
+          # ---- 把fail.txt域名去重，反向匹配原始源输出html div+a ----
+          list_cnt=0
           if [[ -f "${FAIL_TXT}" && -s "${FAIL_TXT}" ]];then
             sort -u "${FAIL_TXT}" -o "${FAIL_TXT}"
             while IFS= read -r fail_domain; do
@@ -203,20 +215,27 @@ jobs:
                 | select( ("https://"+$host) == $dom or ("http://"+$host) == $dom )
                 | .name
               ' "${TMP_CS}" | sort -u | while read -r src_name;do
-                echo "${src_name} | ${fail_domain}" >> "${SRC_LIST}"
+                echo "<div><a href=\"${fail_domain}\" target=\"_blank\">${src_name}</a></div>" >> "$HTML_OUT"
+                list_cnt=$((list_cnt+1))
               done
             done < "${FAIL_TXT}"
-            list_cnt=$(wc -l < "${SRC_LIST}")
-            echo "【2.3失败源清单输出完成】候选人工排查条目：${list_cnt}，输出至 sourcesurl.txt"
           fi
+
+          # html闭合标签
+          cat >> "$HTML_OUT" <<EOF
+</body>
+</html>
+EOF
+
+          echo "【2.3失败源HTML清单输出完成】条目数：${list_cnt}，输出 sources.html"
 
           # 全部临时文件清理，fail.txt是临时，不提交仓库
           rm -f VODCMSXMLcs.json VODCMSXMLyx.json resp.tmp.raw "${FAIL_TXT}"
       - name: 提交更新结果文件
         uses: EndBug/add-and-commit@v11
         with:
-          add: VODCMSXML-YZ.json sourcesurl.txt
-          message: "🤖ZY‑Player风格测速更新 $(date '+%Y‑%m‑%d %H:%M') VODCMSXML‑YZ.json sourcesurl.txt"
+          add: VODCMSXML-YZ.json sources.html
+          message: "🤖ZY‑Player风格测速更新 $(date '+%Y‑%m‑%d %H:%M') VODCMSXML‑YZ.json sources.html"
           committer_name: Github‑Action
           committer_email: action@github.com
           pull: true

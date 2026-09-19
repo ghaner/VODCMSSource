@@ -88,7 +88,7 @@ jobs:
 
       - name: 2.2‑extra 白名单Chrome‑UA专项测速｜追加成功源至VODCMSXMLyx.json
         run: |
-          TMP_CS="VODCMSXMLcs.json"
+          TMP_RAW="VODCMSXML.json"
           OUT_MAIN="VODCMSXMLyx.json"
           CHROME_TMP_JSONL="chrome_ok.tmp.jsonl"
           RESP_CHROME="resp_chrome.tmp.raw"
@@ -103,18 +103,19 @@ jobs:
             exit 0
           fi
 
-          #读取白名单api列表
           WHITELIST_API=()
           while IFS= read -r line; do
             [[ -z "$line" || "$line" =~ ^# ]] && continue
-            WHITELIST_API+=("$line")
+            # 白名单api预处理：去掉末尾全部斜杠
+            clean_line=$(echo "$line" | sed 's:/*$::')
+            WHITELIST_API+=("$clean_line")
           done < "${WHITELIST_FILE}"
 
           for target_api in "${WHITELIST_API[@]}"; do
-            #从VODCMSXMLcs.json取出完整源对象
-            item=$(jq -c --arg api "${target_api}" '.[] | select(.api == $api)' "${TMP_CS}")
+            # 从原始VODCMSXML.json取出完整源对象，同时对json内api也去掉末尾斜杠再比对
+            item=$(jq -c --arg api "${target_api}" '.[] | select( (.api | sub("/+$";"")) == $api )' "${TMP_RAW}")
             if [[ -z "${item}" ]];then
-              echo "⚠️白名单api【${target_api}】在VODCMSXMLcs.json中找不到源记录，跳过"
+              echo "⚠️白名单api【${target_api}】在VODCMSXML.json中找不到源记录，跳过"
               continue
             fi
             api_url=$(echo "$item" | jq -r '.api')
@@ -136,8 +137,8 @@ jobs:
               echo "❌[ChromeUA HTTP异常 ${resp_code}] id:${src_id} ${src_name}"
               continue
             fi
-            if grep -iq "<html" "${RESP_CHROME}";then
-              echo "❌[ChromeUA返回HTML风控] id:${src_id} ${src_name}"
+            if grep -iq "<html" "${RESP_CHROME}" || [[ ! -s "${RESP_CHROME}" ]];then
+              echo "❌[ChromeUA返回HTML风控/空响应] id:${src_id} ${src_name}"
               continue
             fi
 

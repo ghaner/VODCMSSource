@@ -86,20 +86,18 @@ jobs:
           echo "【2.2测速模块完成】测速成功源数量：${valid_raw}，临时输出：${TMP_YX_RAW}"
           rm -f "$TMP_JSONL"
 
-      - name: 2.2‑extra 白名单Chrome‑UA专项测速｜追加成功源至VODCMSXMLyx.json
+      - name: 2.2‑extra 白名单源直接加入结果集，置于排序末尾
         run: |
           TMP_RAW="VODCMSXML.json"
           OUT_MAIN="VODCMSXMLyx.json"
           CHROME_TMP_JSONL="chrome_ok.tmp.jsonl"
-          RESP_CHROME="resp_chrome.tmp.raw"
           WHITELIST_FILE="./Chrome‑UAXML.txt"
-          CHROME_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 
-          rm -f "${CHROME_TMP_JSONL}" "${RESP_CHROME}"
+          rm -f "${CHROME_TMP_JSONL}"
           touch "${CHROME_TMP_JSONL}"
 
           if [[ ! -f "${WHITELIST_FILE}" ]];then
-            echo "ℹ️ Chrome‑UAXML.txt 文件不存在，跳过Chrome‑UA专项测速"
+            echo "ℹ️ Chrome‑UAXML.txt 文件不存在，跳过白名单追加"
             exit 0
           fi
 
@@ -116,58 +114,27 @@ jobs:
               echo "⚠️白名单api【${target_api}】在VODCMSXML.json中找不到源记录，跳过"
               continue
             fi
-            api_url=$(echo "$item" | jq -r '.api')
             src_name=$(echo "$item" | jq -r '.name')
             src_id=$(echo "$item" | jq -r '.id')
-            rm -f "${RESP_CHROME}"
-
-            # 超时由5s上调到8s，改善海外网络超时
-            result=$(curl -s -X GET -L -m 8 -o "${RESP_CHROME}" -w "%{http_code} %{time_total}" -A "${CHROME_UA}" "${api_url}" || echo "000 8.0")
-            resp_code=$(echo "$result" | awk '{print $1}')
-            time_total=$(echo "$result" | awk '{print $2}')
-            latency_ms=$(awk -v t="$time_total" 'BEGIN{printf "%.0f", t*1000}')
-
-            if [[ "${resp_code}" == "000" ]];then
-              echo "❌[ChromeUA网络失败] id:${src_id} ${src_name} | ${api_url}"
-              continue
-            fi
-            if [[ ! "${resp_code}" =~ ^(200|301|302)$ ]];then
-              echo "❌[ChromeUA HTTP异常 ${resp_code}] id:${src_id} ${src_name} | ${api_url}"
-              continue
-            fi
-            if grep -iq "<html" "${RESP_CHROME}" || [[ ! -s "${RESP_CHROME}" ]];then
-              echo "❌[ChromeUA返回HTML风控/空响应] id:${src_id} ${src_name} | ${api_url}"
-              continue
-            fi
-
-            is_valid_content=0
-            if xmllint --noout "${RESP_CHROME}" 2>/dev/null;then
-                is_valid_content=1
-            elif jq empty "${RESP_CHROME}" 2>/dev/null;then
-                is_valid_content=1
-            fi
-
-            if [[ $is_valid_content -eq 1 ]];then
-              echo "✅[Chrome‑UA专项测速可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
-              line=$(echo "$item" | jq -c --argjson lat "${latency_ms}" '. + {latency_ms:$lat}' 2>/dev/null)
-              if [[ $? -eq 0 && -n "${line}" ]];then
-                echo "${line}" >> "${CHROME_TMP_JSONL}"
-              fi
-            else
-              echo "❌[ChromeUA解析失败，非点播XML/JSON] id:${src_id} ${src_name} | ${api_url}"
+            echo "✅直接加入结果集 id:${src_id} ${src_name}"
+            # 固定latency_ms=99999，sort_by会排到列表最后
+            line=$(echo "$item" | jq -c '. + {latency_ms:99999}' 2>/dev/null)
+            if [[ $? -eq 0 && -n "${line}" ]];then
+              echo "${line}" >> "${CHROME_TMP_JSONL}"
             fi
           done
 
+          # 合并到VODCMSXMLyx.json
           if [[ -s "${CHROME_TMP_JSONL}" ]];then
             jq -s '($[0] + $[1])' "${OUT_MAIN}" <(jq -s '.' "${CHROME_TMP_JSONL}") > tmp_merge.json
             mv tmp_merge.json "${OUT_MAIN}"
-            chrome_ok_cnt=$(jq 'length' "${CHROME_TMP_JSONL}")
+            add_cnt=$(jq 'length' "${CHROME_TMP_JSONL}")
             total_after_merge=$(jq 'length' "${OUT_MAIN}")
-            echo "【2.2‑extra合并完成】Chrome‑UA测速成功${chrome_ok_cnt}条；VODCMSXMLyx.json总源数：${total_after_merge}"
+            echo "【2.2‑extra合并完成】直接追加白名单源${add_cnt}条；VODCMSXMLyx.json总源数：${total_after_merge}"
           else
-            echo "ℹ️Chrome‑UA专项测速无可用源，不做合并"
+            echo "ℹ️白名单无有效源，不做合并"
           fi
-          rm -f "${CHROME_TMP_JSONL}" "${RESP_CHROME}"
+          rm -f "${CHROME_TMP_JSONL}"
 
       - name: 2.3 测速结果处理｜重命名name、排序、分配id、字段赋值，输出VODCMSXML‑YZ.json
         run: |

@@ -13,195 +13,163 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: 安装工具 jq curl
-        run: sudo apt update && sudo apt install -y jq curl
+      - name: 安装工具 jq curl libxml2-utils
+        run: sudo apt update && sudo apt install -y jq curl libxml2-utils
       - name: 2.1 VODCMSXML.json格式化｜api链接去重输出VODCMSXMLcs.json
         run: |
           INPUT_RAW="VODCMSXML.json"
           TMP_CS="VODCMSXMLcs.json"
           rm -f "$TMP_CS"
           jq '
-            # 不再移除api末尾斜杠，保留原始url原样；直接按原始api精确去重
-            reduce .[] as $item (
+            # 归一化api：移除url末尾多余斜杠，消除末尾 / 和无/ 的字符串差异，用于正确去重
+            map(.api |= ( if type=="string" then sub("/+$";"") else . end ))
+            | reduce .[] as $item (
               [];
               if any(.[]; .api == $item.api) then . else . + [$item] end
             )
           ' "$INPUT_RAW" > "$TMP_CS"
           total_input=$(jq 'length' "$TMP_CS")
           echo "【2.1格式化完成】去重后源总数：${total_input}，输出临时文件：${TMP_CS}"
-
-      - name: 2.2‑A 普通源测速｜排除Chrome‑UAXML白名单链接，默认UA测速
+      - name: 2.2 测速模块｜读取VODCMSXMLcs.json，测速成功输出VODCMSXMLyx.json
         run: |
-          # 移除 set -euo pipefail！！管道while循环会触发bash管道陷阱，业务内部自行捕获错误
           TMP_CS="VODCMSXMLcs.json"
-          OUT_JSONL="speed_normal.tmp.jsonl"
-          RESP_TMP="resp_normal.tmp.raw"
-          WHITELIST_FILE="./Chrome‑UAXML.txt"
-          DEFAULT_UA="Mozilla/5.0 (X11; Linux x86_64) curl-githubaction"
-
-          #加载白名单api存入数组
-          WHITELIST_API=()
-          if [[ -f "${WHITELIST_FILE}" ]];then
-            while IFS= read -r line; do
-              [[ -z "$line" || "$line" =~ ^# ]] && continue
-              WHITELIST_API+=("$line")
-            done < "${WHITELIST_FILE}"
-          fi
-
-          is_in_whitelist(){
-            local target="$1"
-            for item in "${WHITELIST_API[@]}";do
-              [[ "${item}" == "${target}" ]] && return 0
-            done
-            return 1
-          }
-
-          rm -f "${OUT_JSONL}" "${RESP_TMP}"
-          touch "${OUT_JSONL}"
-
-          # 关键：把jq输出写入临时文件，再while读取，规避管道子shell陷阱
-          jq -c '.[]' "${TMP_CS}" > _tmp_jq_stream.tmp
-          while IFS= read -r item; do
-            api_url=$(echo "$item" | jq -r '.api')
-            src_name=$(echo "$item" | jq -r '.name')
-            src_id=$(echo "$item" | jq -r '.id')
-            rm -f "${RESP_TMP}"
-
-            #白名单链接直接跳过，留给2.2‑B处理
-            if is_in_whitelist "${api_url}";then
-              continue
-            fi
-            if [[ -z "$api_url" || "$api_url" == "null" ]];then
-              echo "⚠️ id:${src_id} ${src_name} api链接为空，跳过"
-              continue
-            fi
-
-            curl_args=("-s" "-X" "GET" "-L" "-m" "5" "-o" "${RESP_TMP}" "-w" "%{http_code} %{time_total}" "-A" "${DEFAULT_UA}")
-            result=$(curl "${curl_args[@]}" "${api_url}" || echo "000 5.0")
-            resp_code=$(echo "$result" | awk '{print $1}')
-            time_total=$(echo "$result" | awk '{print $2}')
-            latency_ms=$(awk -v t="$time_total" 'BEGIN{printf "%.0f", t*1000}')
-
-            if [[ "${resp_code}" == "000" ]];then
-              echo "❌[网络失败] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
-              continue
-            fi
-            if [[ ! "${resp_code}" =~ ^(200|301|302)$ ]];then
-              echo "❌[HTTP异常 ${resp_code}] id:${src_id} ${src_name} latency:${latency_ms}ms"
-              continue
-            fi
-            if grep -iq "<html" "${RESP_TMP}";then
-              echo "❌[解析失败：返回HTML风控页面] id:${src_id} ${src_name} latency:${latency_ms}ms"
-              continue
-            fi
-
-            #文本特征判断XML / JSON，彻底移除xmllint，消除外部程序退出码陷阱
-            is_valid_content=0
-            if grep -qE '<?xml|<rss|<list' "${RESP_TMP}" 2>/dev/null;then
-              is_valid_content=1
-            elif jq empty "${RESP_TMP}" 2>/dev/null;then
-              is_valid_content=1
-            fi
-
-            if [[ $is_valid_content -eq 1 ]];then
-              echo "✅[普通源可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
-              line=$(echo "$item" | jq -c --argjson lat "${latency_ms}" '. + {latency_ms:$lat}' 2>/dev/null)
-              if [[ $? -eq 0 && -n "${line}" ]];then
-                echo "${line}" >> "${OUT_JSONL}"
+          TMP_JSONL="speed_ok.tmp.jsonl"
+          TMP_YX_RAW="VODCMSXMLyx.json"
+          RESP_TMP="resp.tmp.raw"
+          rm -f "$TMP_JSONL" "$TMP_YX_RAW" "$RESP_TMP"
+          jq -c '.[]' "$TMP_CS" | while read -r item; do
+              api_url=$(echo "$item" | jq -r '.api')
+              src_name=$(echo "$item" | jq -r '.name')
+              src_id=$(echo "$item" | jq -r '.id')
+              rm -f "$RESP_TMP"
+              if [[ -z "$api_url" || "$api_url" == "null" ]];then
+                echo "⚠️ id:${src_id} ${src_name} api链接为空，跳过"
+                continue
               fi
-            else
-              echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
-            fi
-          done < _tmp_jq_stream.tmp
-          rm -f _tmp_jq_stream.tmp
-          echo "【2.2‑A普通测速完成】普通源有效记录行数：$(wc -l < ${OUT_JSONL})"
+              # GET请求、跟随重定向、5s超时，保存完整响应体
+              result=$(curl -s -X GET -L -m 5 -o "$RESP_TMP" -w "%{http_code} %{time_total}" "$api_url" || echo "000 5.0")
+              resp_code=$(echo "$result" | awk '{print $1}')
+              time_total=$(echo "$result" | awk '{print $2}')
+              latency_ms=$(awk -v t="$time_total" 'BEGIN{printf "%.0f", t*1000}')
+              # 网络层失败
+              if [[ "$resp_code" == "000" ]];then
+                echo "❌[网络失败] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
+                continue
+              fi
+              if [[ ! "$resp_code" =~ ^(200|301|302)$ ]];then
+                echo "❌[HTTP异常 ${resp_code}] id:${src_id} ${src_name} latency:${latency_ms}ms"
+                continue
+              fi
+              # 返回HTML页面直接判定解析失败（风控、验证码、网页）
+              if grep -iq "<html" "$RESP_TMP";then
+                echo "❌[解析失败：返回HTML风控页面] id:${src_id} ${src_name} latency:${latency_ms}ms"
+                continue
+              fi
+              # 不依赖MIME，优先尝试XML，失败尝试JSON，任一解析成功即有效
+              is_valid_content=0
+              if xmllint --noout "$RESP_TMP" 2>/dev/null;then
+                  is_valid_content=1
+              elif jq empty "$RESP_TMP" 2>/dev/null;then
+                  is_valid_content=1
+              fi
+              if [[ $is_valid_content -eq 1 ]];then
+                echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
+                # 输出单行jsonl，只追加latency_ms，字段完全继承原始源
+                echo "$item" | jq -c --argjson lat "$latency_ms" '. + {latency_ms:$lat}' >> "$TMP_JSONL"
+              else
+                echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
+              fi
+          done
+          # jsonl转标准JSON数组，输出VODCMSXMLyx.json，结构与VODCMSXML.json完全一致
+          jq -s '.' "$TMP_JSONL" > "$TMP_YX_RAW"
+          valid_raw=$(jq 'length' "$TMP_YX_RAW")
+          echo "【2.2测速模块完成】测速成功源数量：${valid_raw}，临时输出：${TMP_YX_RAW}"
+          rm -f "$TMP_JSONL"
 
-      - name: 2.2‑B ChromeUA专属测速｜仅处理Chrome‑UAXML.txt清单内链接
+      - name: 2.2‑extra 白名单Chrome‑UA专项测速｜追加成功源至VODCMSXMLyx.json
         run: |
-          # 同样删除 set -euo pipefail
           TMP_CS="VODCMSXMLcs.json"
-          OUT_JSONL="speed_chrome.tmp.jsonl"
-          RESP_TMP="resp_chrome.tmp.raw"
+          OUT_MAIN="VODCMSXMLyx.json"
+          CHROME_TMP_JSONL="chrome_ok.tmp.jsonl"
+          RESP_CHROME="resp_chrome.tmp.raw"
           WHITELIST_FILE="./Chrome‑UAXML.txt"
           CHROME_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 
-          rm -f "${OUT_JSONL}" "${RESP_TMP}"
-          touch "${OUT_JSONL}"
+          rm -f "${CHROME_TMP_JSONL}" "${RESP_CHROME}"
+          touch "${CHROME_TMP_JSONL}"
 
           if [[ ! -f "${WHITELIST_FILE}" ]];then
-            echo "ℹ️ Chrome‑UAXML.txt不存在，跳过ChromeUA测速步骤"
+            echo "ℹ️ Chrome‑UAXML.txt 文件不存在，跳过Chrome‑UA专项测速"
             exit 0
           fi
 
-          #读取白名单api集合
+          #读取白名单api列表
           WHITELIST_API=()
           while IFS= read -r line; do
             [[ -z "$line" || "$line" =~ ^# ]] && continue
             WHITELIST_API+=("$line")
           done < "${WHITELIST_FILE}"
 
-          #循环白名单内每一条api，从VODCMSXMLcs.json取出完整源对象测速
-          for target_api in "${WHITELIST_API[@]}";do
+          for target_api in "${WHITELIST_API[@]}"; do
+            #从VODCMSXMLcs.json取出完整源对象
             item=$(jq -c --arg api "${target_api}" '.[] | select(.api == $api)' "${TMP_CS}")
             if [[ -z "${item}" ]];then
-              echo "⚠️白名单api:${target_api} 在VODCMSXMLcs.json找不到对应源，跳过"
+              echo "⚠️白名单api【${target_api}】在VODCMSXMLcs.json中找不到源记录，跳过"
               continue
             fi
             api_url=$(echo "$item" | jq -r '.api')
             src_name=$(echo "$item" | jq -r '.name')
             src_id=$(echo "$item" | jq -r '.id')
-            rm -f "${RESP_TMP}"
+            rm -f "${RESP_CHROME}"
 
-            curl_args=("-s" "-X" "GET" "-L" "-m" "5" "-o" "${RESP_TMP}" "-w" "%{http_code} %{time_total}" "-A" "${CHROME_UA}")
-            result=$(curl "${curl_args[@]}" "${api_url}" || echo "000 5.0")
+            #Chrome UA curl测速
+            result=$(curl -s -X GET -L -m 5 -o "${RESP_CHROME}" -w "%{http_code} %{time_total}" -A "${CHROME_UA}" "${api_url}" || echo "000 5.0")
             resp_code=$(echo "$result" | awk '{print $1}')
             time_total=$(echo "$result" | awk '{print $2}')
             latency_ms=$(awk -v t="$time_total" 'BEGIN{printf "%.0f", t*1000}')
 
             if [[ "${resp_code}" == "000" ]];then
-              echo "❌[ChromeUA网络失败] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
+              echo "❌[ChromeUA网络失败] id:${src_id} ${src_name} | ${api_url}"
               continue
             fi
             if [[ ! "${resp_code}" =~ ^(200|301|302)$ ]];then
-              echo "❌[ChromeUA‑HTTP异常 ${resp_code}] id:${src_id} ${src_name} latency:${latency_ms}ms"
+              echo "❌[ChromeUA HTTP异常 ${resp_code}] id:${src_id} ${src_name}"
               continue
             fi
-            if grep -iq "<html" "${RESP_TMP}";then
-              echo "❌[ChromeUA解析失败：返回HTML风控页面] id:${src_id} ${src_name} latency:${latency_ms}ms"
+            if grep -iq "<html" "${RESP_CHROME}";then
+              echo "❌[ChromeUA返回HTML风控] id:${src_id} ${src_name}"
               continue
             fi
 
             is_valid_content=0
-            if grep -qE '<?xml|<rss|<list' "${RESP_TMP}" 2>/dev/null;then
-              is_valid_content=1
-            elif jq empty "${RESP_TMP}" 2>/dev/null;then
-              is_valid_content=1
+            if xmllint --noout "${RESP_CHROME}" 2>/dev/null;then
+                is_valid_content=1
+            elif jq empty "${RESP_CHROME}" 2>/dev/null;then
+                is_valid_content=1
             fi
 
             if [[ $is_valid_content -eq 1 ]];then
-              echo "✅[ChromeUA源可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
+              echo "✅[Chrome‑UA专项测速可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
               line=$(echo "$item" | jq -c --argjson lat "${latency_ms}" '. + {latency_ms:$lat}' 2>/dev/null)
               if [[ $? -eq 0 && -n "${line}" ]];then
-                echo "${line}" >> "${OUT_JSONL}"
+                echo "${line}" >> "${CHROME_TMP_JSONL}"
               fi
             else
-              echo "❌[ChromeUA解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
+              echo "❌[ChromeUA解析失败，非点播XML/JSON] id:${src_id} ${src_name}"
             fi
           done
-          echo "【2.2‑B ChromeUA测速完成】Chrome源有效记录行数：$(wc -l < ${OUT_JSONL})"
 
-      - name: 2.2‑C 合并普通+ChromeUA测速结果输出VODCMSXMLyx.json
-        run: |
-          TMP_YX_RAW="VODCMSXMLyx.json"
-          NORMAL_JSONL="speed_normal.tmp.jsonl"
-          CHROME_JSONL="speed_chrome.tmp.jsonl"
-          rm -f "${TMP_YX_RAW}"
-          #合并两份jsonl
-          cat "${NORMAL_JSONL}" "${CHROME_JSONL}" | jq -s '.' > "${TMP_YX_RAW}"
-          valid_total=$(jq 'length' "${TMP_YX_RAW}")
-          echo "【2.2‑C合并完成】全部测速成功源总数：${valid_total}，输出：${TMP_YX_RAW}"
-          #清理中间jsonl临时文件
-          rm -f "${NORMAL_JSONL}" "${CHROME_JSONL}" resp_normal.tmp.raw resp_chrome.tmp.raw
+          # 将chrome_ok.tmp.jsonl里面成功源，追加合并到VODCMSXMLyx.json
+          if [[ -s "${CHROME_TMP_JSONL}" ]];then
+            jq -s '($[0] + $[1])' "${OUT_MAIN}" <(jq -s '.' "${CHROME_TMP_JSONL}") > tmp_merge.json
+            mv tmp_merge.json "${OUT_MAIN}"
+            chrome_ok_cnt=$(jq 'length' "${CHROME_TMP_JSONL}")
+            total_after_merge=$(jq 'length' "${OUT_MAIN}")
+            echo "【2.2‑extra合并完成】Chrome‑UA测速成功${chrome_ok_cnt}条；VODCMSXMLyx.json总源数：${total_after_merge}"
+          else
+            echo "ℹ️Chrome‑UA专项测速无可用源，不做合并"
+          fi
+          rm -f "${CHROME_TMP_JSONL}" "${RESP_CHROME}"
 
       - name: 2.3 测速结果处理｜重命名name、排序、分配id、字段赋值，输出VODCMSXML‑YZ.json
         run: |
@@ -253,8 +221,7 @@ jobs:
           final_count=$(jq 'length' "$OUTPUT")
           echo "【2.3结果处理完成】最终可用源数量: ${final_count}，输出：${OUTPUT}"
           # 清理全部临时文件
-          rm -f VODCMSXMLcs.json VODCMSXMLyx.json
-
+          rm -f VODCMSXMLcs.json VODCMSXMLyx.json resp.tmp.raw
       - name: 提交更新结果文件
         uses: EndBug/add-and-commit@v11
         with:

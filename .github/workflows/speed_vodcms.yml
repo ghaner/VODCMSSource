@@ -37,7 +37,6 @@ jobs:
           RESP_TMP="resp.tmp.raw"
           WHITELIST_FILE="./Chrome‑UAXML.txt"
           CHROME_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-
           # 加载Chrome‑UAXML.txt白名单，过滤注释、空行存入数组
           WHITELIST_API=()
           if [[ -f "${WHITELIST_FILE}" ]];then
@@ -46,7 +45,6 @@ jobs:
               WHITELIST_API+=("$line")
             done < "${WHITELIST_FILE}"
           fi
-
           # 判断api是否命中白名单函数
           is_in_whitelist(){
             local target="$1"
@@ -57,7 +55,6 @@ jobs:
             done
             return 1
           }
-
           rm -f "$TMP_JSONL" "$TMP_YX_RAW" "$RESP_TMP"
           jq -c '.[]' "$TMP_CS" | while read -r item; do
               api_url=$(echo "$item" | jq -r '.api')
@@ -68,7 +65,6 @@ jobs:
                 echo "⚠️ id:${src_id} ${src_name} api链接为空，跳过"
                 continue
               fi
-
               # 组装curl参数
               curl_args=()
               curl_args+=("-s" "-X" "GET" "-L" "-m" "5" "-o" "$RESP_TMP" "-w" "%{http_code} %{time_total}")
@@ -76,7 +72,6 @@ jobs:
                 curl_args+=("-A" "$CHROME_UA")
                 echo "ℹ️ id:${src_id} ${src_name} api命中Chrome‑UAXML白名单，使用Chrome‑UA测速"
               fi
-
               result=$(curl "${curl_args[@]}" "$api_url" || echo "000 5.0")
               resp_code=$(echo "$result" | awk '{print $1}')
               time_total=$(echo "$result" | awk '{print $2}')
@@ -97,11 +92,19 @@ jobs:
               fi
               # 不依赖MIME，优先尝试XML，失败尝试JSON，任一解析成功即有效
               is_valid_content=0
-              if xmllint --noout "$RESP_TMP" 2>/dev/null;then
+              # 使用子shell捕获xmllint退出码，避免非0返回导致整个脚本异常终止
+              xmllint_ret=0
+              xmllint --noout "$RESP_TMP" 2>/dev/null || xmllint_ret=$?
+              if [[ $xmllint_ret -eq 0 ]];then
                   is_valid_content=1
-              elif jq empty "$RESP_TMP" 2>/dev/null;then
-                  is_valid_content=1
+              else
+                  # XML校验失败，尝试JSON校验
+                  jq empty "$RESP_TMP" 2>/dev/null
+                  if [[ $? -eq 0 ]];then
+                      is_valid_content=1
+                  fi
               fi
+
               if [[ $is_valid_content -eq 1 ]];then
                 echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
                 # 修复：捕获输出到变量，stderr丢弃；jq执行成功且非空才写入jsonl，防止错误污染临时文件

@@ -1,6 +1,7 @@
 name: ZY‑Player风格点播源测速(按延迟升序)
 on:
   schedule:
+    # UTC周五16点 = 北京时间周六00:00
     - cron: '0 16 * * 5'
   workflow_dispatch:
 jobs:
@@ -23,7 +24,7 @@ jobs:
           TMP_CONFLICT_NAME=conflict_names.tmp.json
           rm -f "$OUTPUT" "$RESP_TMP" "$INPUT_DEDUP" "$TMP_CONFLICT_NAME"
 
-          # 按api去重
+          # 按api字段去重，保留数组中首次出现的条目
           jq '
             reduce .[] as $item (
               [];
@@ -31,17 +32,29 @@ jobs:
             )
           ' "$INPUT" > "$INPUT_DEDUP"
 
-          # 预计算冲突name
+          # 预计算：得到【需要格式化名称的name数组】写入临时文件
           jq '
             group_by(.name)
-            | map({name:.[0].name, api_cnt:(map(.api)|unique|length)})
-            | map(select(.api_cnt>1)|.name)
+            | map(
+                {
+                  name: .[0].name,
+                  api_cnt: (map(.api) | unique | length)
+                }
+              )
+            | map(select(.api_cnt > 1) | .name)
           ' "$INPUT_DEDUP" > "$TMP_CONFLICT_NAME"
+
+          # 兜底，空文件强制为空数组[]
+          if [ ! -s "$TMP_CONFLICT_NAME" ];then
+            echo "[]" > "$TMP_CONFLICT_NAME"
+          fi
+          # 将【需要格式化名称的name数组】读入shell变量，后续传入jq
+          CONFLICT_NAMES=$(cat "$TMP_CONFLICT_NAME")
 
           total=$(jq 'length' "$INPUT_DEDUP")
           echo "【ZY‑Player模拟测速】总源数量(去重后): $total"
 
-          # 测速循环：输出处理后的json到stdout，不写临时jsonl文件
+          # NUL字节安全读取JSON，测速；日志全部输出stderr，stdout只输出有效JSON对象
           jq -c --raw-output0 '.[]' "$INPUT_DEDUP" | while IFS= read -r -d '' item; do
             api_url=$(echo "$item" | jq -r ".api")
             src_name=$(echo "$item" | jq -r ".name")
@@ -80,7 +93,7 @@ jobs:
 
             if [[ $is_valid_content -eq 1 ]];then
               echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}" >&2
-              # 输出JSON到stdout，供后续管道处理
+              # 输出原始对象+临时字段，name保持原样不做修改
               echo "$item" | jq --argjson lat "$latency_ms" '
                 def getSecondDomainBody:
                   (.api|type) as $t
@@ -97,22 +110,26 @@ jobs:
               echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms" >&2
             fi
           done \
-          | jq -s '
-              # 第一步：读入数组，只保留真正JSON对象，剔除数组、字符串、null碎片
-              map(select(type=="object"))
-            ' \
-          | jq --argjson conflict "$(cat "$TMP_CONFLICT_NAME")" '
-              . as $all
+          | jq -s --argjson conflict_names "$CONFLICT_NAMES" '
+              # 1.全部读入数组，过滤：只保留合法对象，剔除碎片
+              map( select(type == "object") ) as $all_items
+              # 2.【已经定义好需要格式化名称的数组：$conflict_names】
+              | $all_items as $all
               | ($all | map(select(.group=="云播")) | sort_by(.latency_ms)) as $yunList
-              | if ($yunList|length)>0 then
+              | if ($yunList | length) > 0 then
                   $yunList[0] as $minYunbo
                   | ( [$minYunbo] + ($all | map(select(.id != $minYunbo.id)) | sort_by(.latency_ms)) )
                 else
-                  ($all|sort_by(.latency_ms))
+                  ($all | sort_by(.latency_ms))
                 end
+              # 核心逻辑：使用预先定义好的$conflict_names数组做判断
               | map(
-                  if ($conflict|index(.name)) then .name = "\(.name)-\(._d2_body)" else . end
-                  | del(._d2_body,.latency_ms)
+                  if ($conflict_names | index(.name)) then
+                      .name = "\(.name)-\(._d2_body)"   # 在定义数组内 → 格式化名称
+                  else
+                      .                                    # 不在数组内 → name保持原样
+                  end
+                  | del(._d2_body, .latency_ms)
                 )
               | to_entries
               | map(.value + {id:(.key+1)})

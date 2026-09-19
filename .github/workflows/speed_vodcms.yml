@@ -104,8 +104,11 @@ jobs:
               fi
               if [[ $is_valid_content -eq 1 ]];then
                 echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
-                # 输出单行jsonl，只追加latency_ms，字段完全继承原始源
-                echo "$item" | jq -c --argjson lat "$latency_ms" '. + {latency_ms:$lat}' >> "$TMP_JSONL"
+                # 修复：捕获输出到变量，stderr丢弃；jq执行成功且非空才写入jsonl，防止错误污染临时文件
+                line=$(echo "$item" | jq -c --argjson lat "$latency_ms" '. + {latency_ms:$lat}' 2>/dev/null)
+                if [ $? -eq 0 ] && [ -n "$line" ]; then
+                  echo "$line" >> "$TMP_JSONL"
+                fi
               else
                 echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
               fi

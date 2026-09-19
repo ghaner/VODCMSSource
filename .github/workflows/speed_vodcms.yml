@@ -81,19 +81,18 @@ jobs:
 
               if [[ $is_valid_content -eq 1 ]];then
                 echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
-                # 修复：先判断api是字符串再执行capture，null直接返回unknown
-                jq --argjson lat "$latency_ms" --argjson obj "$item" '
+                # 修复：通过管道输入json对象，不用--argjson传递json字符串；增加api类型保护
+                echo "$item" | jq --argjson lat "$latency_ms" '
                 def getSecondDomainBody:
-                  ($obj.api | type) as $t
+                  (.api | type) as $t
                   | if $t != "string" then "unknown"
                     else
-                      ($obj.api | capture("^https?://(?<host>[^/]+)") | .host // null) as $h
+                      (.api | capture("^https?://(?<host>[^/]+)") | .host // null) as $h
                       | if $h == null then "unknown"
                         else ($h | split(".") | if length >=2 then .[-2] else $h end)
                       end
                     end;
-                $obj
-                | . + {
+                . + {
                     latency_ms: $lat,
                     _d2_body: getSecondDomainBody,
                     isActive:true,

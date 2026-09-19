@@ -672,10 +672,10 @@
     "status": "可用"
   },
   {
-    "key": "zKG5mS",
+    "key": "h0ZBBM",
     "id": 57,
     "name": "番茄-fqzy",
-    "api": "https://fqzy.me/api.php/provide/vod/at/xml",
+    "api": "https://fqzy.me//api.php/provide/vod/at/xml",
     "download": "",
     "jiexiUrl": "",
     "group": "十八",
@@ -684,10 +684,10 @@
     "status": "可用"
   },
   {
-    "key": "h0ZBBM",
+    "key": "zKG5mS",
     "id": 58,
     "name": "番茄-fqzy",
-    "api": "https://fqzy.me//api.php/provide/vod/at/xml",
+    "api": "https://fqzy.me/api.php/provide/vod/at/xml",
     "download": "",
     "jiexiUrl": "",
     "group": "十八",
@@ -960,10 +960,10 @@
     "status": "可用"
   },
   {
-    "key": "NqE40f",
+    "key": "tKdagV",
     "id": 81,
     "name": "辣椒-apilj",
-    "api": "https://apilj.com/api.php/provide/vod/at/xml",
+    "api": "https://apilj.com/api.php/Seacms/vod",
     "download": "",
     "jiexiUrl": "",
     "group": "十八",
@@ -972,10 +972,10 @@
     "status": "可用"
   },
   {
-    "key": "tKdagV",
+    "key": "NqE40f",
     "id": 82,
     "name": "辣椒-apilj",
-    "api": "https://apilj.com/api.php/Seacms/vod",
+    "api": "https://apilj.com/api.php/provide/vod/at/xml",
     "download": "",
     "jiexiUrl": "",
     "group": "十八",
@@ -1044,10 +1044,10 @@
     "status": "可用"
   },
   {
-    "key": "ZbdwIk",
+    "key": "26fEeV",
     "id": 88,
-    "name": "非凡-ffzyapi",
-    "api": "http://cj.ffzyapi.com/api.php/provide/vod/at/xml",
+    "name": "非凡-ffzy5",
+    "api": "https://ffzy5.tv/api.php/provide/vod/at/xml",
     "download": "",
     "jiexiUrl": "",
     "group": "云播",
@@ -1056,10 +1056,10 @@
     "status": "可用"
   },
   {
-    "key": "26fEeV",
+    "key": "ZbdwIk",
     "id": 89,
-    "name": "非凡-ffzy5",
-    "api": "https://ffzy5.tv/api.php/provide/vod/at/xml",
+    "name": "非凡-ffzyapi",
+    "api": "http://cj.ffzyapi.com/api.php/provide/vod/at/xml",
     "download": "",
     "jiexiUrl": "",
     "group": "云播",

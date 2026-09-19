@@ -32,7 +32,7 @@ jobs:
 
       - name: 2.2‑A 普通源测速｜排除Chrome‑UAXML白名单链接，默认UA测速
         run: |
-          set -euo pipefail
+          # 移除 set -euo pipefail！！管道while循环会触发bash管道陷阱，业务内部自行捕获错误
           TMP_CS="VODCMSXMLcs.json"
           OUT_JSONL="speed_normal.tmp.jsonl"
           RESP_TMP="resp_normal.tmp.raw"
@@ -59,7 +59,9 @@ jobs:
           rm -f "${OUT_JSONL}" "${RESP_TMP}"
           touch "${OUT_JSONL}"
 
-          jq -c '.[]' "${TMP_CS}" | while IFS= read -r item; do
+          # 关键：把jq输出写入临时文件，再while读取，规避管道子shell陷阱
+          jq -c '.[]' "${TMP_CS}" > _tmp_jq_stream.tmp
+          while IFS= read -r item; do
             api_url=$(echo "$item" | jq -r '.api')
             src_name=$(echo "$item" | jq -r '.name')
             src_id=$(echo "$item" | jq -r '.id')
@@ -110,12 +112,13 @@ jobs:
             else
               echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
             fi
-          done
+          done < _tmp_jq_stream.tmp
+          rm -f _tmp_jq_stream.tmp
           echo "【2.2‑A普通测速完成】普通源有效记录行数：$(wc -l < ${OUT_JSONL})"
 
       - name: 2.2‑B ChromeUA专属测速｜仅处理Chrome‑UAXML.txt清单内链接
         run: |
-          set -euo pipefail
+          # 同样删除 set -euo pipefail
           TMP_CS="VODCMSXMLcs.json"
           OUT_JSONL="speed_chrome.tmp.jsonl"
           RESP_TMP="resp_chrome.tmp.raw"
@@ -189,7 +192,6 @@ jobs:
 
       - name: 2.2‑C 合并普通+ChromeUA测速结果输出VODCMSXMLyx.json
         run: |
-          set -euo pipefail
           TMP_YX_RAW="VODCMSXMLyx.json"
           NORMAL_JSONL="speed_normal.tmp.jsonl"
           CHROME_JSONL="speed_chrome.tmp.jsonl"

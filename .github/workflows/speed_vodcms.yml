@@ -124,12 +124,13 @@ jobs:
           done
 
           if [[ -s "${CHROME_TMP_JSONL}" ]];then
-            # 修复：--slurpfile规避bash解析$符号问题
-            jq -s --slurpfile f1 "${OUT_MAIN}" '$f1[0] + .' <(jq -s '.' "${CHROME_TMP_JSONL}") > tmp_merge.json
+            jq -s '.' "${CHROME_TMP_JSONL}" > tmp_whitelist.json
+            jq -s '.[0] + .[1]' "${OUT_MAIN}" tmp_whitelist.json > tmp_merge.json
             mv tmp_merge.json "${OUT_MAIN}"
-            add_cnt=$(jq 'length' "${CHROME_TMP_JSONL}")
+            add_cnt=$(jq 'length' tmp_whitelist.json)
             total_after_merge=$(jq 'length' "${OUT_MAIN}")
             echo "【2.2‑extra合并完成】直接追加白名单源${add_cnt}条；VODCMSXMLyx.json总源数：${total_after_merge}"
+            rm -f tmp_whitelist.json
           else
             echo "ℹ️白名单无有效源，不做合并"
           fi

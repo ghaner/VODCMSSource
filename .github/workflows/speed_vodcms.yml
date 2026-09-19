@@ -144,12 +144,9 @@ jobs:
           rm -f "$OUTPUT" "$HTML_OUT"
 
           jq '
-            # 直接排序，不做任何api去重；缺失latency_ms默认99999垫底
             sort_by(.latency_ms // 99999)
-            # 预提取云播组延迟最小对象
             | map(select(.group=="云播")) as $yunGroup
             | ($yunGroup | if length>0 then sort_by(.latency_ms)[0] else null end) as $yunMinObj
-            # 2.3.2 name相同、api不同，name追加二级域名主体不带后缀
             | group_by(.name)
             | map(
                 . as $grp
@@ -173,15 +170,12 @@ jobs:
                   end
               )
             | flatten
-            # 统一状态字段
             | map(.isActive = true | .status = "可用")
-            # 云播最小源置顶；其余保留测速升序排在后面；无云播则维持原排序
             | if $yunMinObj != null then
                 [ $yunMinObj ] + ( . | map(select(.api != $yunMinObj.api)) )
               else
                 .
               end
-            # 分配id：置顶项id=1，往下依次2,3,4…，删除latency_ms
             | to_entries
             | map( .value + {id:(.key + 1)} | del(.latency_ms) )
           ' "$TMP_YX_RAW" > "$OUTPUT"
@@ -189,47 +183,38 @@ jobs:
           final_count=$(jq 'length' "$OUTPUT")
           echo "【2.3结果处理完成】最终可用源数量: ${final_count}，输出：${OUTPUT}"
 
-          # 初始化html文档
-          cat > "$HTML_OUT" <<EOF
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<title>测速失败点播源清单</title>
-</head>
-<body>
-<h3>测速失败站点（点击新窗口打开，人工查找新xml接口）</h3>
-EOF
+          # 构建HTML，使用printf避免yaml heredoc冲突
+          printf '%s\n' \
+          '<!DOCTYPE html>' \
+          '<html lang="zh-CN">' \
+          '<head>' \
+          '<meta charset="UTF-8">' \
+          '<title>测速失败点播源清单</title>' \
+          '</head>' \
+          '<body>' \
+          '<h3>测速失败站点（点击新窗口打开，人工查找新xml接口）</h3>' > "$HTML_OUT"
 
-          # ---- 把fail.txt域名去重，反向匹配原始源输出html div+a ----
           list_cnt=0
           if [[ -f "${FAIL_TXT}" && -s "${FAIL_TXT}" ]];then
             sort -u "${FAIL_TXT}" -o "${FAIL_TXT}"
             while IFS= read -r fail_domain; do
               [[ -z "$fail_domain" ]] && continue
               fail_domain=$(echo "$fail_domain" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-              # 在原始VODCMSXMLcs.json匹配api的协议+域名等于fail_domain的源，取name
               jq -r --arg dom "${fail_domain}" '
                 .[]
                 | (.api | sub("/+$";"") | capture("^https?://(?<h>[^/]+)").h?) as $host
                 | select( ("https://"+$host) == $dom or ("http://"+$host) == $dom )
                 | .name
               ' "${TMP_CS}" | sort -u | while read -r src_name;do
-                echo "<div><a href=\"${fail_domain}\" target=\"_blank\">${src_name}</a></div>" >> "$HTML_OUT"
+                printf '<div><a href="%s" target="_blank">%s</a></div>\n' "${fail_domain}" "${src_name}" >> "$HTML_OUT"
                 list_cnt=$((list_cnt+1))
               done
             done < "${FAIL_TXT}"
           fi
 
-          # html闭合标签
-          cat >> "$HTML_OUT" <<EOF
-</body>
-</html>
-EOF
-
+          printf '%s\n' '</body>' '</html>' >> "$HTML_OUT"
           echo "【2.3失败源HTML清单输出完成】条目数：${list_cnt}，输出 sources.html"
 
-          # 全部临时文件清理，fail.txt是临时，不提交仓库
           rm -f VODCMSXMLcs.json VODCMSXMLyx.json resp.tmp.raw "${FAIL_TXT}"
       - name: 提交更新结果文件
         uses: EndBug/add-and-commit@v11

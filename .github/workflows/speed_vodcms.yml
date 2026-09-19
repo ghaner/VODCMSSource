@@ -122,15 +122,20 @@ jobs:
             | flatten
             # 2.3.4 2.3.5 统一状态字段
             | map(.isActive = true | .status = "可用")
-            # 组装输出数组：第一条放云播最小源，后面跟其余延迟升序源；无云播则维持原排序
-            | if $yunMinObj != null then
-                [ $yunMinObj ] + ( . | map(select(.api != $yunMinObj.api)) )
-              else
-                .
-              end
-            # 业务第1条 id=1；业务第2条 id=2 …；代码下标 .key 从0开始，id = .key + 1
+            # id分配：使用测速延迟升序数组的原始下标
             | to_entries
-            | map( .value + {id:(.key + 1)} | del(.latency_ms) )
+            | map(
+                .key as $idx
+                | .value as $item
+                | if ($yunMinObj != null) and ($item.api == $yunMinObj.api) then
+                    $item + {id:1}
+                  else
+                    $item + {id: ($idx + 1)}
+                  end
+                | del(.latency_ms)
+            )
+            # 文档规定：输出数组从上往下按照id升序排列
+            | sort_by(.id)
           ' "$TMP_YX_RAW" > "$OUTPUT"
           final_count=$(jq 'length' "$OUTPUT")
           echo "【2.3结果处理完成】最终可用源数量: ${final_count}，输出：${OUTPUT}"

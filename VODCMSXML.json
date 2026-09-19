@@ -3438,5 +3438,16 @@
     "group": "云播",
     "isActive": true,
     "reverseOrder": false
+  },
+  {
+    "key": "PF4HE3",
+    "id": 288,
+    "name": "番号",
+    "api": "http://fhapiby.com/api.php/provide/vod/at/xml/",
+    "download": "",
+    "jiexiUrl": "",
+    "group": "十八",
+    "isActive": true,
+    "reverseOrder": false
   }
 ]

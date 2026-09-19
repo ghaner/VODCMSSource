@@ -13,77 +13,92 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
       - name: 安装工具 jq curl libxml2-utils
         run: sudo apt update && sudo apt install -y jq curl libxml2-utils
+
       - name: ZY‑Player逻辑测速，校验内容有效性，采集延迟排序
         run: |
           INPUT="VODCMSXML.json"
           INPUT_DEDUP="VODCMSXML-dedup.tmp.json"
           OUTPUT="VODCMSXML-YZ.json"
+          TMP_VALID_RAW=valid_raw.tmp.jsonl
           RESP_TMP=resp.tmp.raw
           TMP_CONFLICT_NAME=conflict_names.tmp.json
-          rm -f "$OUTPUT" "$RESP_TMP" "$INPUT_DEDUP" "$TMP_CONFLICT_NAME"
-          # 按api字段去重，保留数组中首次出现的条目
+
+          # 清理全部临时文件
+          rm -f "$OUTPUT" "$TMP_VALID_RAW" "$RESP_TMP" "$INPUT_DEDUP" "$TMP_CONFLICT_NAME"
+
+          ################################################
+          # 模块A：预处理
+          ################################################
+          # 按api去重，保留首次出现
           jq '
             reduce .[] as $item (
               [];
               if any(.[]; .api == $item.api) then . else . + [$item] end
             )
           ' "$INPUT" > "$INPUT_DEDUP"
-          # 预计算：得到【需要格式化名称的name数组】写入临时文件
+
+          # 预计算【需要改名的name数组】
           jq '
             group_by(.name)
-            | map(
-                {
-                  name: .[0].name,
-                  api_cnt: (map(.api) | unique | length)
-                }
-              )
+            | map({name:.[0].name, api_cnt:(map(.api)|unique|length)})
             | map(select(.api_cnt > 1) | .name)
           ' "$INPUT_DEDUP" > "$TMP_CONFLICT_NAME"
-          # 兜底，空文件强制为空数组[]
-          if [ ! -s "$TMP_CONFLICT_NAME" ];then
+
+          # 兜底空文件为空数组
+          if [ ! -s "$TMP_CONFLICT_NAME" ]; then
             echo "[]" > "$TMP_CONFLICT_NAME"
           fi
-          # 将【需要格式化名称的name数组】读入shell变量，后续传入jq
           CONFLICT_NAMES=$(cat "$TMP_CONFLICT_NAME")
+
           total=$(jq 'length' "$INPUT_DEDUP")
           echo "【ZY‑Player模拟测速】总源数量(去重后): $total"
-          # NUL字节安全读取JSON，测速；日志全部输出stderr，stdout只输出有效JSON对象
+
+          ################################################
+          # 模块B：测速循环；输出前校验必须是object才写入磁盘临时jsonl
+          ################################################
           jq -c --raw-output0 '.[]' "$INPUT_DEDUP" | while IFS= read -r -d '' item; do
-            api_url=$(echo "$item" | jq -r ".api")
-            src_name=$(echo "$item" | jq -r ".name")
-            src_id=$(echo "$item" | jq -r ".id")
+            api_url=$(echo "$item" | jq -r '.api')
+            src_name=$(echo "$item" | jq -r '.name')
+            src_id=$(echo "$item" | jq -r '.id')
             rm -f "$RESP_TMP"
+
             if [[ -z "$api_url" || "$api_url" == "null" ]];then
-              echo "⚠️ id:${src_id} ${src_name} api链接为空，跳过" >&2
+              echo "⚠️ id:${src_id} ${src_name} api链接为空，跳过"
               continue
             fi
+
             result=$(curl -s -X GET -L -m 5 -o "$RESP_TMP" -w "%{http_code} %{time_total}" "$api_url" || echo "000 5.0")
             resp_code=$(echo "$result" | awk '{print $1}')
             time_total=$(echo "$result" | awk '{print $2}')
             latency_ms=$(awk -v t="$time_total" 'BEGIN{printf "%.0f", t*1000}')
+
             if [[ "$resp_code" == "000" ]];then
-              echo "❌[网络失败] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}" >&2
+              echo "❌[网络失败] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
               continue
             fi
             if [[ ! "$resp_code" =~ ^(200|301|302)$ ]];then
-              echo "❌[HTTP异常 ${resp_code}] id:${src_id} ${src_name} latency:${latency_ms}ms" >&2
+              echo "❌[HTTP异常 ${resp_code}] id:${src_id} ${src_name} latency:${latency_ms}ms"
               continue
             fi
             if grep -iq "<html" "$RESP_TMP";then
-              echo "❌[解析失败：返回HTML风控页面] id:${src_id} ${src_name} latency:${latency_ms}ms" >&2
+              echo "❌[解析失败：返回HTML风控页面] id:${src_id} ${src_name} latency:${latency_ms}ms"
               continue
             fi
+
             is_valid_content=0
             if xmllint --noout "$RESP_TMP" 2>/dev/null;then
-                is_valid_content=1
+              is_valid_content=1
             elif jq empty "$RESP_TMP" 2>/dev/null;then
-                is_valid_content=1
+              is_valid_content=1
             fi
+
             if [[ $is_valid_content -eq 1 ]];then
-              echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}" >&2
-              # 输出原始对象+临时字段，name保持原样不做修改；存入变量先校验类型再输出，防止非对象流入管道
+              echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
+
+              # 加工对象，获取带临时字段的json文本
               out_obj=$(echo "$item" | jq --argjson lat "$latency_ms" '
                 def getSecondDomainBody:
                   (.api|type) as $t
@@ -96,42 +111,51 @@ jobs:
                     end;
                 . + {latency_ms:$lat, _d2_body:getSecondDomainBody, isActive:true, status:"可用"}
               ')
+
+              # 校验必须是对象，才写入磁盘临时文件
               obj_type=$(echo "$out_obj" | jq -r 'type' 2>/dev/null || true)
-              # 仅当为object才输出到stdout管道，数组/其他类型直接丢弃
               if [[ "$obj_type" == "object" ]];then
-                echo "$out_obj"
+                echo "$out_obj" >> "$TMP_VALID_RAW"
               else
-                echo "⚠️丢弃非对象输出，type=$obj_type id:$src_id" >&2
+                echo "⚠️丢弃非对象输出 id:$src_id type:$obj_type"
               fi
             else
-              echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms" >&2
+              echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
             fi
-          done \
-          | jq -s --argjson conflict_names "$CONFLICT_NAMES" '
-              map( select(type == "object") ) as $all_items
-              | $all_items as $all
-              | ($all | map(select(.group=="云播")) | sort_by(.latency_ms)) as $yunList
-              | if ($yunList | length) > 0 then
-                  $yunList[0] as $minYunbo
-                  | ( [$minYunbo] + ($all | map(select(.id != $minYunbo.id)) | sort_by(.latency_ms)) )
+          done
+
+          ################################################
+          # 模块C：后置处理，读取磁盘上已经校验过的jsonl
+          ################################################
+          jq -s --argjson conflict_names "$CONFLICT_NAMES" '
+            map( select(type == "object") ) as $all_items
+            | $all_items as $all
+            | ($all | map(select(.group=="云播")) | sort_by(.latency_ms)) as $yunList
+            | if ($yunList | length) > 0 then
+                $yunList[0] as $minYunbo
+                | ( [$minYunbo] + ($all | map(select(.id != $minYunbo.id)) | sort_by(.latency_ms)) )
+              else
+                ($all | sort_by(.latency_ms))
+              end
+            | map(
+                if ($conflict_names | index(.name)) then
+                    .name = "\(.name)-\(._d2_body)"
                 else
-                  ($all | sort_by(.latency_ms))
+                    .
                 end
-              # 预先定义$conflict_names数组：命中数组内name才执行名称格式化，其余保持原name
-              | map(
-                  if ($conflict_names | index(.name)) then
-                      .name = "\(.name)-\(._d2_body)"
-                  else
-                      .
-                  end
-                  | del(._d2_body, .latency_ms)
-                )
-              | to_entries
-              | map(.value + {id:(.key+1)})
-            ' > "$OUTPUT"
-          rm -f "$RESP_TMP" "$INPUT_DEDUP" "$TMP_CONFLICT_NAME"
+                | del(._d2_body, .latency_ms)
+              )
+            | to_entries
+            | map(.value + {id:(.key+1)})
+          ' "$TMP_VALID_RAW" > "$OUTPUT"
+
+          ################################################
+          # 模块D：清理临时文件
+          ################################################
+          rm -f "$TMP_VALID_RAW" "$RESP_TMP" "$INPUT_DEDUP" "$TMP_CONFLICT_NAME"
           valid_count=$(jq 'length' "$OUTPUT")
           echo "测速结束，可用源数量: ${valid_count}，输出文件：${OUTPUT}"
+
       - name: 提交更新结果文件
         uses: EndBug/add-and-commit@v11
         with:

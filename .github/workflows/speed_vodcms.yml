@@ -102,10 +102,14 @@ jobs:
               fi
           done
           # ==========后置处理流程==========
-          # 1.读取冲突name列表；2.对属于冲突name的条目拼接name，非冲突保留原name；3.排序、置顶云播、重分配id、删除临时字段
+          # 兜底：临时文件为空字节时强制为空数组，避免jq解析报错
+          if [ ! -s "$TMP_CONFLICT_NAME" ];then
+            echo "[]" > "$TMP_CONFLICT_NAME"
+          fi
           CONFLICT_JSON=$(cat "$TMP_CONFLICT_NAME")
-          jq -s --argjson conflict "$CONFLICT_JSON" '
-            . as $all
+          # 移除 -s 参数，使用 [inputs] 读取jsonl，修复Cannot index array with string "name"
+          jq --argjson conflict "$CONFLICT_JSON" '
+            [inputs] as $all
             | ($all | map(select(.group=="云播")) | sort_by(.latency_ms) | first) as $minYunbo
             | if $minYunbo != null then
                 ( [$minYunbo] + ($all | map(select(. != $minYunbo)) | sort_by(.latency_ms)) )

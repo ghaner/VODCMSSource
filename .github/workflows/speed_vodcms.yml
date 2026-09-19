@@ -106,13 +106,11 @@ jobs:
           WHITELIST_API=()
           while IFS= read -r line; do
             [[ -z "$line" || "$line" =~ ^# ]] && continue
-            # 白名单api预处理：去掉末尾全部斜杠
             clean_line=$(echo "$line" | sed 's:/*$::')
             WHITELIST_API+=("$clean_line")
           done < "${WHITELIST_FILE}"
 
           for target_api in "${WHITELIST_API[@]}"; do
-            # 从原始VODCMSXML.json取出完整源对象，同时对json内api也去掉末尾斜杠再比对
             item=$(jq -c --arg api "${target_api}" '.[] | select( (.api | sub("/+$";"")) == $api )' "${TMP_RAW}")
             if [[ -z "${item}" ]];then
               echo "⚠️白名单api【${target_api}】在VODCMSXML.json中找不到源记录，跳过"
@@ -123,8 +121,8 @@ jobs:
             src_id=$(echo "$item" | jq -r '.id')
             rm -f "${RESP_CHROME}"
 
-            #Chrome UA curl测速
-            result=$(curl -s -X GET -L -m 5 -o "${RESP_CHROME}" -w "%{http_code} %{time_total}" -A "${CHROME_UA}" "${api_url}" || echo "000 5.0")
+            # 超时由5s上调到8s，改善海外网络超时
+            result=$(curl -s -X GET -L -m 8 -o "${RESP_CHROME}" -w "%{http_code} %{time_total}" -A "${CHROME_UA}" "${api_url}" || echo "000 8.0")
             resp_code=$(echo "$result" | awk '{print $1}')
             time_total=$(echo "$result" | awk '{print $2}')
             latency_ms=$(awk -v t="$time_total" 'BEGIN{printf "%.0f", t*1000}')
@@ -134,11 +132,11 @@ jobs:
               continue
             fi
             if [[ ! "${resp_code}" =~ ^(200|301|302)$ ]];then
-              echo "❌[ChromeUA HTTP异常 ${resp_code}] id:${src_id} ${src_name}"
+              echo "❌[ChromeUA HTTP异常 ${resp_code}] id:${src_id} ${src_name} | ${api_url}"
               continue
             fi
             if grep -iq "<html" "${RESP_CHROME}" || [[ ! -s "${RESP_CHROME}" ]];then
-              echo "❌[ChromeUA返回HTML风控/空响应] id:${src_id} ${src_name}"
+              echo "❌[ChromeUA返回HTML风控/空响应] id:${src_id} ${src_name} | ${api_url}"
               continue
             fi
 
@@ -156,11 +154,10 @@ jobs:
                 echo "${line}" >> "${CHROME_TMP_JSONL}"
               fi
             else
-              echo "❌[ChromeUA解析失败，非点播XML/JSON] id:${src_id} ${src_name}"
+              echo "❌[ChromeUA解析失败，非点播XML/JSON] id:${src_id} ${src_name} | ${api_url}"
             fi
           done
 
-          # 将chrome_ok.tmp.jsonl里面成功源，追加合并到VODCMSXMLyx.json
           if [[ -s "${CHROME_TMP_JSONL}" ]];then
             jq -s '($[0] + $[1])' "${OUT_MAIN}" <(jq -s '.' "${CHROME_TMP_JSONL}") > tmp_merge.json
             mv tmp_merge.json "${OUT_MAIN}"

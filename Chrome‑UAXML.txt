@@ -3,3 +3,5 @@
 #艾旦
 https://lovedan.net/api.php/provide/vod/at/xml/
 https://lovedan.net/api.php/provide/vod/at/xml
+#奥斯卡
+https://aosikazy1.com/api.php/provide/vod/at/xml

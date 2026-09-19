@@ -45,7 +45,8 @@ jobs:
           ' "$INPUT_DEDUP" > "$TMP_CONFLICT_NAME"
           total=$(jq 'length' "$INPUT_DEDUP")
           echo "【ZY‑Player模拟测速】总源数量(去重后): $total"
-          jq -c '.[]' "$INPUT_DEDUP" | while read -r item; do
+          # 修复shell read读取JSON缺陷：增加IFS=，防止破坏json内容
+          jq -c '.[]' "$INPUT_DEDUP" | while IFS= read -r item; do
               api_url=$(echo "$item" | jq -r '.api')
               src_name=$(echo "$item" | jq -r '.name')
               src_id=$(echo "$item" | jq -r '.id')
@@ -82,20 +83,20 @@ jobs:
               fi
               if [[ $is_valid_content -eq 1 ]];then
                 echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
-                # 【修复点1】测速阶段不再修改name，原样保留原始name，只附加latency等字段
-                echo "$item" | jq --argjson lat "$latency_ms" '
+                # 使用--argjson传入对象，避免echo输出破坏JSON，保证输出行是合法对象
+                jq --argjson lat "$latency_ms" --argjson obj "$item" '
                 def getSecondDomainBody:
-                  (.api | capture("^https?://(?<host>[^/]+)") | .host // null) as $h
+                  (.obj.api | capture("^https?://(?<host>[^/]+)") | .host // null) as $h
                   | if $h == null then null
                     else ($h | split(".") | if length >=2 then .[-2] else $h end)
                     end;
-                (. as $o | getSecondDomainBody as $d2
+                $obj
                 | . + {
                     latency_ms: $lat,
-                    _d2_body: ($d2 // "unknown"), # 临时保存二级域名主体，后置使用
+                    _d2_body: (getSecondDomainBody // "unknown"),
                     isActive:true,
                     status:"可用"
-                  })
+                  }
                 ' >> "$TMP_VALID"
               else
                 echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
@@ -107,12 +108,13 @@ jobs:
             echo "[]" > "$TMP_CONFLICT_NAME"
           fi
           CONFLICT_JSON=$(cat "$TMP_CONFLICT_NAME")
-          # 移除 -s 参数，使用 [inputs] 读取jsonl，修复Cannot index array with string "name"
-          jq --argjson conflict "$CONFLICT_JSON" '
-            [inputs] as $all
-            | ($all | map(select(.group=="云播")) | sort_by(.latency_ms) | first) as $minYunbo
-            | if $minYunbo != null then
-                ( [$minYunbo] + ($all | map(select(. != $minYunbo)) | sort_by(.latency_ms)) )
+          # 恢复 -s slurp 安全读取jsonl；修复云播置顶逻辑：用id匹配移除对象，禁止对象整体比对
+          jq -s --argjson conflict "$CONFLICT_JSON" '
+            . as $all
+            | ($all | map(select(.group=="云播")) | sort_by(.latency_ms)) as $yunList
+            | if ($yunList | length) > 0 then
+                $yunList[0] as $minYunbo
+                | ( [$minYunbo] + ($all | map(select(.id != $minYunbo.id)) | sort_by(.latency_ms)) )
               else
                 ($all | sort_by(.latency_ms))
               end

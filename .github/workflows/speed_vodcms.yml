@@ -136,8 +136,8 @@ jobs:
           OUTPUT="VODCMSXML-YZ.json"
           rm -f "$OUTPUT"
           jq '
-            # 2.3.1 点播源数组按照测速延迟升序排列
-            sort_by(.latency_ms)
+            # 直接排序，不做任何api去重；缺失latency_ms默认99999垫底
+            sort_by(.latency_ms // 99999)
             # 预提取云播组延迟最小对象
             | map(select(.group=="云播")) as $yunGroup
             | ($yunGroup | if length>0 then sort_by(.latency_ms)[0] else null end) as $yunMinObj

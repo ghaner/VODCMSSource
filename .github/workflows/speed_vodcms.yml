@@ -91,9 +91,9 @@ jobs:
           OUTPUT="VODCMSXML-YZ.json"
           rm -f "$OUTPUT"
           jq '
-            # 2.3.1 整体按测速延迟升序排列
+            # 2.3.1 点播源数组按照测速延迟升序排列
             sort_by(.latency_ms)
-            # 预提取云播组延迟最小对象，兼容jq1.6语法
+            # 预提取云播组延迟最小对象
             | map(select(.group=="云播")) as $yunGroup
             | ($yunGroup | if length>0 then sort_by(.latency_ms)[0] else null end) as $yunMinObj
             # 2.3.2 name相同、api不同，name追加二级域名主体不带后缀
@@ -120,22 +120,17 @@ jobs:
                   end
               )
             | flatten
-            # 2.3.4 2.3.5 统一状态字段
+            # 统一状态字段
             | map(.isActive = true | .status = "可用")
-            # id分配：使用测速延迟升序数组的原始下标
+            # 云播最小源置顶；其余保留测速升序排在后面；无云播则维持原排序
+            | if $yunMinObj != null then
+                [ $yunMinObj ] + ( . | map(select(.api != $yunMinObj.api)) )
+              else
+                .
+              end
+            # 分配id：置顶项id=1，往下依次2,3,4…，删除latency_ms
             | to_entries
-            | map(
-                .key as $idx
-                | .value as $item
-                | if ($yunMinObj != null) and ($item.api == $yunMinObj.api) then
-                    $item + {id:1}
-                  else
-                    $item + {id: ($idx + 1)}
-                  end
-                | del(.latency_ms)
-            )
-            # 文档规定：输出数组从上往下按照id升序排列
-            | sort_by(.id)
+            | map( .value + {id:(.key + 1)} | del(.latency_ms) )
           ' "$TMP_YX_RAW" > "$OUTPUT"
           final_count=$(jq 'length' "$OUTPUT")
           echo "【2.3结果处理完成】最终可用源数量: ${final_count}，输出：${OUTPUT}"

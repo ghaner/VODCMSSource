@@ -13,6 +13,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
       - name: 安装工具 jq curl libxml2-utils
         run: sudo apt update && sudo apt install -y jq curl libxml2-utils
 
@@ -99,10 +100,12 @@ jobs:
           OUTPUT="VODCMSXML-YZ.json"
           rm -f "$OUTPUT"
           jq '
-            . as $all
-            # 2.3.1 整体先按测速延迟升序排列
-            | sort_by(.latency_ms)
-            # 2.3.2 name相同api不同 → name追加二级域名主体(不带后缀)
+            # 2.3.1 整体按测速延迟升序排列，数组顺序全程不再改动
+            sort_by(.latency_ms)
+            # 预提取云播组延迟最小对象，用于id赋值，兼容jq1.6
+            | map(select(.group=="云播")) as $yunGroup
+            | ($yunGroup | if length>0 then sort_by(.latency_ms)[0] else null end) as $yunMinObj
+            # 2.3.2 name相同、api不同，name追加二级域名主体不带后缀
             | group_by(.name)
             | map(
                 . as $grp
@@ -111,42 +114,44 @@ jobs:
                     $grp
                   else
                     $grp | map(
-                      (.api | type) as $t
-                      | if $t != "string" then .
+                      .api as $apiStr
+                      | if ($apiStr | type) != "string" then .
                       else
-                        (.api | capture("^https?://(?<host>[^/]+)") | .host // null) as $h
-                        | ($h | split(".") ) as $parts
-                        # 提取二级域名主体，去掉后缀；不足则为unknown
-                        | ($parts | length >=2 ? $parts[-2] : "unknown") as $secHost
-                        | .name = "\(.name)-\($secHost)"
+                        ($apiStr | capture("^https?://(?<host>[^/]+)").host?) as $h
+                        | ($h | split(".")) as $parts
+                        | if ($parts | length) >= 2 then
+                            .name = "\(.name)-\($parts[-2])"
+                          else
+                            .name = "\(.name)-unknown"
+                          end
                       end
                     )
                   end
               )
             | flatten
-            # 2.3.3：云播group取延迟最小，设置id=1；其余按延迟升序序号+1
-            | ( map(select(.group=="云播")) | if length>0 then sort_by(.latency_ms)[0] else null end ) as $yunMinItem
-            | . as $afterRename
-            | if ($yunMinItem != null) then
-                # 把云播最小延迟项放数组首位
-                [$yunMinItem] + ($afterRename | map(select(.id != $yunMinItem.id)))
-              else
-                $afterRename
-              end
             # 2.3.4 2.3.5 统一字段
-            | map(
-                .isActive = true
-                | .status = "可用"
-                | del(.latency_ms)
-              )
-            # 重分配id，数组索引从0开始 → id = key+1；云播最小项在0位自动得到id=1
+            | map(.isActive = true | .status = "可用")
+            # 2.3.3 id分配逻辑：保持延迟升序顺序；云播最小源id强制=1；其余索引+1，避让id=1冲突
             | to_entries
-            | map(.value + {id:(.key + 1)})
+            | map(
+                .key as $idx
+                | .value as $item
+                | if ($yunMinObj != null) and ($item.api == $yunMinObj.api) then
+                    $item + {id:1}
+                  else
+                    if (($idx + 1) == 1) then
+                       $item + {id:2}
+                    else
+                       $item + {id:($idx + 1)}
+                    end
+                  end
+                | del(.latency_ms)
+            )
           ' "$TMP_YX_RAW" > "$OUTPUT"
 
           final_count=$(jq 'length' "$OUTPUT")
           echo "【2.3结果处理完成】最终可用源数量: ${final_count}，输出：${OUTPUT}"
-          # 清理临时文件
+          # 清理全部临时文件
           rm -f VODCMSXMLcs.json VODCMSXMLyx.json resp.tmp.raw
 
       - name: 提交更新结果文件

@@ -42,11 +42,8 @@ jobs:
           total=$(jq 'length' "$INPUT_DEDUP")
           echo "【ZY‑Player模拟测速】总源数量(去重后): $total"
 
-          # jq输出每行对象，xargs调用bash，完全避开while read截断JSON
-          jq -c '.[]' "$INPUT_DEDUP" | xargs -I {} bash -c '
-            item="$1"
-            RESP_TMP="$2"
-            TMP_VALID="$3"
+          # --------核心修复：使用NULL字节分隔读取JSON，彻底规避引号/换行破坏
+          jq -c --raw-output0 '.[]' "$INPUT_DEDUP" | while IFS= read -r -d '' item; do
             api_url=$(echo "$item" | jq -r ".api")
             src_name=$(echo "$item" | jq -r ".name")
             src_id=$(echo "$item" | jq -r ".id")
@@ -54,25 +51,25 @@ jobs:
 
             if [[ -z "$api_url" || "$api_url" == "null" ]];then
               echo "⚠️ id:${src_id} ${src_name} api链接为空，跳过"
-              exit 0
+              continue
             fi
 
             result=$(curl -s -X GET -L -m 5 -o "$RESP_TMP" -w "%{http_code} %{time_total}" "$api_url" || echo "000 5.0")
-            resp_code=$(echo "$result" | awk "{print \$1}")
-            time_total=$(echo "$result" | awk "{print \$2}")
-            latency_ms=$(awk -v t="$time_total" "BEGIN{printf \"%.0f\", t*1000}")
+            resp_code=$(echo "$result" | awk '{print $1}')
+            time_total=$(echo "$result" | awk '{print $2}')
+            latency_ms=$(awk -v t="$time_total" 'BEGIN{printf "%.0f", t*1000}')
 
             if [[ "$resp_code" == "000" ]];then
               echo "❌[网络失败] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
-              exit 0
+              continue
             fi
             if [[ ! "$resp_code" =~ ^(200|301|302)$ ]];then
               echo "❌[HTTP异常 ${resp_code}] id:${src_id} ${src_name} latency:${latency_ms}ms"
-              exit 0
+              continue
             fi
             if grep -iq "<html" "$RESP_TMP";then
               echo "❌[解析失败：返回HTML风控页面] id:${src_id} ${src_name} latency:${latency_ms}ms"
-              exit 0
+              continue
             fi
 
             is_valid_content=0
@@ -84,22 +81,22 @@ jobs:
 
             if [[ $is_valid_content -eq 1 ]];then
               echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
-              echo "$item" | jq --argjson lat "$latency_ms" "
+              echo "$item" | jq --argjson lat "$latency_ms" '
                 def getSecondDomainBody:
-                  (.api|type) as \$t
-                  | if \$t != \"string\" then \"unknown\"
+                  (.api|type) as $t
+                  | if $t != "string" then "unknown"
                     else
-                      (.api | capture(\"^https?://(?<host>[^/]+)\") | .host // null) as \$h
-                      | if \$h == null then \"unknown\"
-                        else (\$h | split(\".\") | if length>=2 then .[-2] else \$h end)
+                      (.api | capture("^https?://(?<host>[^/]+)") | .host // null) as $h
+                      | if $h == null then "unknown"
+                        else ($h | split(".") | if length>=2 then .[-2] else $h end)
                       end
                     end;
-                . + {latency_ms:\$lat, _d2_body:getSecondDomainBody, isActive:true, status:\"可用\"}
-              " >> "$TMP_VALID"
+                . + {latency_ms:$lat, _d2_body:getSecondDomainBody, isActive:true, status:"可用"}
+              ' >> "$TMP_VALID"
             else
               echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
             fi
-          ' _ {} "$RESP_TMP" "$TMP_VALID"
+          done
 
           # 后置处理
           if [ ! -s "$TMP_CONFLICT_NAME" ];then

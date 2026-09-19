@@ -110,7 +110,6 @@ jobs:
 
           for target_api in "${WHITELIST_API[@]}"; do
             echo "🔍匹配白名单api: ${target_api}"
-            # jq直接过滤 + 添加latency_ms，输出到jsonl，避开shell多行变量bug
             jq -c --arg api "${target_api}" '
               .[]
               | select( (.api | sub("/+$";"")) == $api )
@@ -125,8 +124,6 @@ jobs:
             add_cnt=$(jq 'length' tmp_whitelist.json)
             total_after_merge=$(jq 'length' "${OUT_MAIN}")
             echo "【2.2‑extra合并完成】直接追加白名单源${add_cnt}条；VODCMSXMLyx.json总源数：${total_after_merge}"
-            # 校验：打印新增的对象，确认latency_ms存在
-            jq '.[-${add_cnt}:] | map({id,name,latency_ms})' "${OUT_MAIN}"
             rm -f tmp_whitelist.json
           else
             echo "ℹ️白名单无有效源，不做合并"

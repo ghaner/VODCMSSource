@@ -3062,7 +3062,7 @@
   {
     "key": "qpIqK3",
     "id": 256,
-    "name": "索尼采集站",
+    "name": "索尼",
     "api": "https://suonizy.net/api.php/provide/vod/at/xml",
     "download": "",
     "jiexiUrl": "",

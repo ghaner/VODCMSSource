@@ -117,16 +117,15 @@ jobs:
             src_name=$(echo "$item" | jq -r '.name')
             src_id=$(echo "$item" | jq -r '.id')
             echo "✅直接加入结果集 id:${src_id} ${src_name}"
-            # 固定latency_ms=99999，sort_by会排到列表最后
             line=$(echo "$item" | jq -c '. + {latency_ms:99999}' 2>/dev/null)
             if [[ $? -eq 0 && -n "${line}" ]];then
               echo "${line}" >> "${CHROME_TMP_JSONL}"
             fi
           done
 
-          # 合并到VODCMSXMLyx.json
           if [[ -s "${CHROME_TMP_JSONL}" ]];then
-            jq -s '($[0] + $[1])' "${OUT_MAIN}" <(jq -s '.' "${CHROME_TMP_JSONL}") > tmp_merge.json
+            # 修复：--slurpfile规避bash解析$符号问题
+            jq -s --slurpfile f1 "${OUT_MAIN}" '$f1[0] + .' <(jq -s '.' "${CHROME_TMP_JSONL}") > tmp_merge.json
             mv tmp_merge.json "${OUT_MAIN}"
             add_cnt=$(jq 'length' "${CHROME_TMP_JSONL}")
             total_after_merge=$(jq 'length' "${OUT_MAIN}")

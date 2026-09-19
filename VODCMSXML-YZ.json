@@ -1,12 +1,24 @@
 [
   {
     "key": "b52Ztd",
-    "id": 2,
+    "id": 1,
     "name": "155",
     "api": "https://155api.com/api.php/provide/vod/at/xml",
     "download": "",
     "jiexiUrl": "",
     "group": "十八",
+    "isActive": true,
+    "reverseOrder": false,
+    "status": "可用"
+  },
+  {
+    "key": "3fAbnF",
+    "id": 1,
+    "name": "鸭鸭-yayazy",
+    "api": "https://cj.yayazy.net/api.php/provide/vod/at/xml",
+    "download": "",
+    "jiexiUrl": "",
+    "group": "云播",
     "isActive": true,
     "reverseOrder": false,
     "status": "可用"
@@ -696,10 +708,10 @@
     "status": "可用"
   },
   {
-    "key": "1QrNNK",
-    "id": 1,
-    "name": "索尼-suoniapi",
-    "api": "https://suoniapi.com/api.php/provide/vod/at/xml",
+    "key": "qpIqK3",
+    "id": 59,
+    "name": "索尼-suonizy",
+    "api": "https://suonizy.net/api.php/provide/vod/at/xml",
     "download": "",
     "jiexiUrl": "",
     "group": "云播",
@@ -708,10 +720,10 @@
     "status": "可用"
   },
   {
-    "key": "qpIqK3",
+    "key": "1QrNNK",
     "id": 60,
-    "name": "索尼-suonizy",
-    "api": "https://suonizy.net/api.php/provide/vod/at/xml",
+    "name": "索尼-suoniapi",
+    "api": "https://suoniapi.com/api.php/provide/vod/at/xml",
     "download": "",
     "jiexiUrl": "",
     "group": "云播",
@@ -984,10 +996,10 @@
     "status": "可用"
   },
   {
-    "key": "ZbdwIk",
+    "key": "26fEeV",
     "id": 83,
-    "name": "非凡-ffzyapi",
-    "api": "http://cj.ffzyapi.com/api.php/provide/vod/at/xml",
+    "name": "非凡-ffzy5",
+    "api": "https://ffzy5.tv/api.php/provide/vod/at/xml",
     "download": "",
     "jiexiUrl": "",
     "group": "云播",
@@ -996,10 +1008,10 @@
     "status": "可用"
   },
   {
-    "key": "26fEeV",
+    "key": "ZbdwIk",
     "id": 84,
-    "name": "非凡-ffzy5",
-    "api": "https://ffzy5.tv/api.php/provide/vod/at/xml",
+    "name": "非凡-ffzyapi",
+    "api": "http://cj.ffzyapi.com/api.php/provide/vod/at/xml",
     "download": "",
     "jiexiUrl": "",
     "group": "云播",
@@ -1056,10 +1068,10 @@
     "status": "可用"
   },
   {
-    "key": "9OBGhn",
+    "key": "unQegX",
     "id": 89,
-    "name": "魔都-mdzyapi",
-    "api": "https://www.mdzyapi.com/api.php/provide/vod/at/xml",
+    "name": "魔都-moduapi",
+    "api": "https://caiji.moduapi.cc/api.php/provide/vod/at/xml",
     "download": "",
     "jiexiUrl": "",
     "group": "云播",
@@ -1068,10 +1080,10 @@
     "status": "可用"
   },
   {
-    "key": "unQegX",
+    "key": "9OBGhn",
     "id": 90,
-    "name": "魔都-moduapi",
-    "api": "https://caiji.moduapi.cc/api.php/provide/vod/at/xml",
+    "name": "魔都-mdzyapi",
+    "api": "https://www.mdzyapi.com/api.php/provide/vod/at/xml",
     "download": "",
     "jiexiUrl": "",
     "group": "云播",
@@ -1087,18 +1099,6 @@
     "download": "",
     "jiexiUrl": "",
     "group": "十八",
-    "isActive": true,
-    "reverseOrder": false,
-    "status": "可用"
-  },
-  {
-    "key": "3fAbnF",
-    "id": 92,
-    "name": "鸭鸭-yayazy",
-    "api": "https://cj.yayazy.net/api.php/provide/vod/at/xml",
-    "download": "",
-    "jiexiUrl": "",
-    "group": "云播",
     "isActive": true,
     "reverseOrder": false,
     "status": "可用"

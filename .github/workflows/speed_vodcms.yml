@@ -4,7 +4,6 @@ on:
     # UTC周五16点 = 北京时间周六00:00
     - cron: '0 16 * * 5'
   workflow_dispatch:
-
 jobs:
   check-api:
     runs-on: ubuntu-latest
@@ -14,10 +13,8 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-
-      - name: 安装工具 jq curl
+      - name: 安装工具 jq curl libxml2-utils
         run: sudo apt update && sudo apt install -y jq curl libxml2-utils
-
       - name: ZY‑Player逻辑测速，校验内容有效性，采集延迟排序
         run: |
           INPUT="VODCMSXML.json"
@@ -25,8 +22,8 @@ jobs:
           OUTPUT="VODCMSXML-YZ.json"
           TMP_VALID=valid.tmp.jsonl
           RESP_TMP=resp.tmp.raw
-          rm -f "$TMP_VALID" "$OUTPUT" "$RESP_TMP" "$INPUT_DEDUP"
-
+          TMP_CONFLICT_NAME=conflict_names.tmp.json
+          rm -f "$TMP_VALID" "$OUTPUT" "$RESP_TMP" "$INPUT_DEDUP" "$TMP_CONFLICT_NAME"
           # 按api字段去重，保留数组中首次出现的条目
           jq '
             reduce .[] as $item (
@@ -35,26 +32,35 @@ jobs:
             )
           ' "$INPUT" > "$INPUT_DEDUP"
 
+          # ==========新增：全局预计算冲突name集合==========
+          # 规则：同一个name下，存在多条不同api → 该name标记为冲突，需要后续追加域名后缀
+          jq '
+            group_by(.name)
+            | map(
+                {
+                  name: .[0].name,
+                  api_cnt: (map(.api) | unique | length)
+                }
+              )
+            | map(select(.api_cnt > 1) | .name)
+          ' "$INPUT_DEDUP" > "$TMP_CONFLICT_NAME"
+
           total=$(jq 'length' "$INPUT_DEDUP")
           echo "【ZY‑Player模拟测速】总源数量(去重后): $total"
-
           jq -c '.[]' "$INPUT_DEDUP" | while read -r item; do
               api_url=$(echo "$item" | jq -r '.api')
               src_name=$(echo "$item" | jq -r '.name')
               src_id=$(echo "$item" | jq -r '.id')
               rm -f "$RESP_TMP"
-
               if [[ -z "$api_url" || "$api_url" == "null" ]];then
                 echo "⚠️ id:${src_id} ${src_name} api链接为空，跳过"
                 continue
               fi
-
               # GET请求、跟随重定向、5s超时，保存完整响应体
               result=$(curl -s -X GET -L -m 5 -o "$RESP_TMP" -w "%{http_code} %{time_total}" "$api_url" || echo "000 5.0")
               resp_code=$(echo "$result" | awk '{print $1}')
               time_total=$(echo "$result" | awk '{print $2}')
               latency_ms=$(awk -v t="$time_total" 'BEGIN{printf "%.0f", t*1000}')
-
               # 网络层失败
               if [[ "$resp_code" == "000" ]];then
                 echo "❌[网络失败] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
@@ -64,13 +70,11 @@ jobs:
                 echo "❌[HTTP异常 ${resp_code}] id:${src_id} ${src_name} latency:${latency_ms}ms"
                 continue
               fi
-
               # 返回HTML页面直接判定解析失败（风控、验证码、网页）
               if grep -iq "<html" "$RESP_TMP";then
                 echo "❌[解析失败：返回HTML风控页面] id:${src_id} ${src_name} latency:${latency_ms}ms"
                 continue
               fi
-
               # 不依赖MIME，优先尝试XML，失败尝试JSON，任一解析成功即有效
               is_valid_content=0
               if xmllint --noout "$RESP_TMP" 2>/dev/null;then
@@ -78,10 +82,9 @@ jobs:
               elif jq empty "$RESP_TMP" 2>/dev/null;then
                   is_valid_content=1
               fi
-
               if [[ $is_valid_content -eq 1 ]];then
                 echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
-                # 提取二级域名主体；格式化 name = "原名称‑二级域名主体"
+                # 【修复点1】测速阶段不再修改name，原样保留原始name，只附加latency等字段
                 echo "$item" | jq --argjson lat "$latency_ms" '
                 def getSecondDomainBody:
                   (.api | capture("^https?://(?<host>[^/]+)") | .host // null) as $h
@@ -91,9 +94,9 @@ jobs:
                 (. as $o | getSecondDomainBody as $d2
                 | . + {
                     latency_ms: $lat,
+                    _d2_body: ($d2 // "unknown"), # 临时保存二级域名主体，后置使用
                     isActive:true,
-                    status:"可用",
-                    name: ($o.name + "-" + ($d2 // "unknown"))
+                    status:"可用"
                   })
                 ' >> "$TMP_VALID"
               else
@@ -101,9 +104,9 @@ jobs:
               fi
           done
 
-          # 组装输出逻辑：
-          # 1.全部可用源数组；2.筛选group=="云播"，取延迟最小1条置顶；3.剩下所有源按latency_ms升序；4.全局重新分配id从1开始
-          jq -s '
+          # ==========后置处理流程==========
+          # 1.读取冲突name列表；2.对属于冲突name的条目拼接name，非冲突保留原name；3.排序、置顶云播、重分配id、删除临时字段
+          jq -s --argfile conflict "$TMP_CONFLICT_NAME" '
             . as $all
             | ($all | map(select(.group=="云播")) | sort_by(.latency_ms) | first) as $minYunbo
             | if $minYunbo != null then
@@ -111,15 +114,20 @@ jobs:
               else
                 ($all | sort_by(.latency_ms))
               end
-            | map(del(.latency_ms))
+            # 核心修复逻辑：仅冲突name执行名称拼接
+            | map(
+                if (.name | IN($conflict[])) then
+                    .name = "\(.name)-\(._d2_body)"
+                  else . end
+                | del(._d2_body, .latency_ms)
+            )
             | to_entries
             | map(.value + {id:(.key+1)})
           ' "$TMP_VALID" > "$OUTPUT"
 
-          rm -f "$TMP_VALID" "$RESP_TMP" "$INPUT_DEDUP"
+          rm -f "$TMP_VALID" "$RESP_TMP" "$INPUT_DEDUP" "$TMP_CONFLICT_NAME"
           valid_count=$(jq 'length' "$OUTPUT")
           echo "测速结束，可用源数量: ${valid_count}，输出文件：${OUTPUT}"
-
       - name: 提交更新结果文件
         uses: EndBug/add-and-commit@v11
         with:

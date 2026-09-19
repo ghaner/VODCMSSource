@@ -2,15 +2,20 @@
 编辑一套GitHub action工作流文件，每周六零点定时执行以下任务
 1.1 按照GitHub仓库（https://github.com/hunlongyu/zy-player）里的测速代码体现的测速逻辑和测速模式对VODCMSXML.json文件中所有数组里api后面双引号里面所有的http或https链接进行测速
 1.2 测速成功的链接所在的点播源数组经相关格式化后覆盖输出到VODCMSXML-YZ.json
-2.编码要求：
-2.1 VODCMSXML.json输入时进行api链接去重
-2.2 输出VODCMSXML-YZ.json相关格式化
-2.2.1 保持VODCMSXML.json格式
-2.2.2 所有点播源数组测速延迟升序排列
-2.2.3 云播group中测速延迟最小的数组的id设定为1，其余所有点播源数组的id为测速延迟升序排列的序号+1
-2.2.4 "isActive":的值统一设置为true
-2.2.5 "status":的值统一设置为"可用"
-2.2.6 VODCMSXML.json中api链接不同name相同的数组中的name格式化为：名称-二级域名主体（不要域名后缀），name追加二级域名
+2.编码要求：代码模块
+2.1 输入模块 VODCMSXML.json输入时进行
+2.1.1 api链接去重
+2.1.2 VODCMSXML.json中api链接不同name相同的数组中的name追加点播源api中的二级域名主体，格式化为：名称-二级域名主体（不要域名后缀）
+2.2 测速  
+2.3 测速结果处理  
+2.3.1 所有测速成功点播源数组测速延迟升序排列
+2.3.2 测速成功点播源中api链接不同name相同的点播源的name追加点播源api中的二级域名主体，格式化为：名称-二级域名主体（不要域名后缀）
+2.4 输出 至VODCMSXML-YZ.json
+2.4.1 保持VODCMSXML.json格式
+2.4.3 云播group中测速延迟最小的数组的id设定为1，其余所有点播源数组的id为测速延迟升序排列的序号+1
+2.4.4 "isActive":的值统一设置为true
+2.4.5 "status":的值统一设置为"可用"
+
 
 优化逻辑：
 ZY‑Player风格点播源测速(按延迟升序) #27

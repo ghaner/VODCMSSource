@@ -15,12 +15,12 @@ jobs:
           fetch-depth: 0
       - name: 安装工具 jq curl libxml2-utils
         run: sudo apt update && sudo apt install -y jq curl libxml2-utils
-      - name: 2.1 输入模块｜api去重 + 同name不同api追加二级域名主体
+
+      - name: 2.1 输入模块｜仅api链接去重，不修改name
         run: |
           INPUT_RAW="VODCMSXML.json"
           TMP_DEDUP="mod_211_dedup.tmp.json"
-          TMP_INPUT_READY="mod_21_input_ready.tmp.json"
-          rm -f "$TMP_DEDUP" "$TMP_INPUT_READY"
+          rm -f "$TMP_DEDUP"
 
           # 2.1.1 api链接去重，保留数组中首次出现的条目
           jq '
@@ -30,39 +30,17 @@ jobs:
             )
           ' "$INPUT_RAW" > "$TMP_DEDUP"
 
-          # 2.1.2 name相同、api不同 → name追加‑二级域名主体；name唯一保持原样
-          jq '
-            group_by(.name)
-            | map(
-                . as $grp
-                | ($grp | map(.api)|unique|length) as $apiCnt
-                | if $apiCnt <= 1 then
-                    $grp
-                  else
-                    $grp | map(
-                      (.api | type) as $t
-                      | if $t != "string" then .
-                      else
-                        (.api | capture("^https?://(?<host>[^/]+)") | .host // null) as $h
-                        | ($h | split(".") | if length >=2 then .[-2] else ($h//"unknown") end) as $d2
-                        | .name = "\(.name)-\($d2)"
-                      end
-                    )
-                  end
-              )
-            | flatten
-          ' "$TMP_DEDUP" > "$TMP_INPUT_READY"
+          total_input=$(jq 'length' "$TMP_DEDUP")
+          echo "【2.1输入模块完成】去重后源总数：${total_input}"
 
-          total_input=$(jq 'length' "$TMP_INPUT_READY")
-          echo "【2.1输入模块完成】处理后源总数：${total_input}"
       - name: 2.2 测速模块｜http请求、内容校验，采集latency_ms
         run: |
-          TMP_INPUT_READY="mod_21_input_ready.tmp.json"
+          TMP_DEDUP="mod_211_dedup.tmp.json"
           TMP_SPEED_OUT="mod_22_speed_out.tmp.jsonl"
           RESP_TMP="resp.tmp.raw"
           rm -f "$TMP_SPEED_OUT" "$RESP_TMP"
 
-          jq -c '.[]' "$TMP_INPUT_READY" | while read -r item; do
+          jq -c '.[]' "$TMP_DEDUP" | while read -r item; do
               api_url=$(echo "$item" | jq -r '.api')
               src_name=$(echo "$item" | jq -r '.name')
               src_id=$(echo "$item" | jq -r '.id')
@@ -76,6 +54,7 @@ jobs:
               resp_code=$(echo "$result" | awk '{print $1}')
               time_total=$(echo "$result" | awk '{print $2}')
               latency_ms=$(awk -v t="$time_total" 'BEGIN{printf "%.0f", t*1000}')
+
               # 网络层失败
               if [[ "$resp_code" == "000" ]];then
                 echo "❌[网络失败] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
@@ -97,39 +76,71 @@ jobs:
               elif jq empty "$RESP_TMP" 2>/dev/null;then
                   is_valid_content=1
               fi
+
               if [[ $is_valid_content -eq 1 ]];then
                 echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
-                # 只附加测速延迟；name已经在输入模块处理完毕，不修改name
+                # 测速只附加延迟，name保持原始，不做任何修改
                 echo "$item" | jq --argjson lat "$latency_ms" '. + {latency_ms:$lat}' >> "$TMP_SPEED_OUT"
               else
                 echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
               fi
           done
-          echo "【2.2测速模块完成】已输出可用源临时jsonl"
-      - name: 2.3测速结果处理 + 2.4输出模块｜排序、云播置顶、重分配id、输出VODCMSXML‑YZ.json
+          echo "【2.2测速模块完成】输出测速成功源临时jsonl"
+
+      - name: 2.3测速结果处理 + 2.4输出模块｜存活源内部计算name冲突、格式化名称、云播置顶、输出VODCMSXML‑YZ.json
         run: |
           TMP_SPEED_OUT="mod_22_speed_out.tmp.jsonl"
           OUTPUT="VODCMSXML-YZ.json"
           rm -f "$OUTPUT"
 
           jq -s '
-            # 读入全部测速成功源
-            . as $allValid
-            # 筛选云播分组，按延迟升序
-            | ($allValid | map(select(.group=="云播")) | sort_by(.latency_ms)) as $yunSorted
+            # 读入全部测速成功源，过滤只保留对象
+            map( select(type == "object") ) as $allValid
+
+            # 在jq内部【基于测速存活源】计算冲突name数组：同name多条存活才标记为冲突
+            | ($allValid
+                | group_by(.name)
+                | map( {n:.[0].name, count:length} )
+                | map( select(.count > 1) | .n )
+            ) as $conflictNameSet
+
+            # 定义提取二级域名主体函数
+            | def getDomainBody:
+                (.api | type) as $t
+                | if $t != "string" then "unknown"
+                else
+                  (.api | capture("^https?://(?<host>[^/]+)") | .host // null) as $h
+                  | if $h == null then "unknown"
+                    else ($h | split(".") | if length>=2 then .[-2] else $h end)
+                  end
+                end;
+
+            # 对存活源做名称格式化：命中冲突集合才追加‑二级域名；不冲突保留原name
+            | $allValid
+              | map(
+                  if ($conflictNameSet | index(.name)) then
+                    .name = "\(.name)-\(getDomainBody)"
+                  else
+                    .
+                  end
+                ) as $renamedSet
+
+            # 云播分组处理：取延迟最小置顶
+            | ($renamedSet | map(select(.group=="云播")) | sort_by(.latency_ms)) as $yunSorted
             | if ($yunSorted | length) > 0 then
-                # 云播最小延迟放第一位，剩余全部源按latency_ms升序
-                [$yunSorted[0]] + ($allValid | map(select(.id != $yunSorted[0].id)) | sort_by(.latency_ms))
+                [$yunSorted[0]] + ($renamedSet | map(select(.id != $yunSorted[0].id)) | sort_by(.latency_ms))
               else
-                ($allValid | sort_by(.latency_ms))
+                ($renamedSet | sort_by(.latency_ms))
               end
-            # 2.4.4 2.4.5 统一设置字段；删除测速临时latency_ms
+
+            # 2.4.4 2.4.5 统一字段；删除测速临时latency_ms
             | map(
                 .isActive = true
                 | .status = "可用"
                 | del(.latency_ms)
               )
-            # 2.4.3：数组顺序就是最终顺序；索引key从0开始 → id = key+1；云播最小延迟处在数组第0位 → id=1
+
+            # 2.4.3 重分配id；数组第0位(云播最小延迟)id=1，依次递增
             | to_entries
             | map(.value + {id:(.key + 1)})
           ' "$TMP_SPEED_OUT" > "$OUTPUT"
@@ -137,8 +148,9 @@ jobs:
           valid_count=$(jq 'length' "$OUTPUT")
           echo "【2.3+2.4处理输出完成】可用源数量: ${valid_count}，输出文件：${OUTPUT}"
 
-          # 清理全部模块临时文件
-          rm -f mod_211_dedup.tmp.json mod_21_input_ready.tmp.json mod_22_speed_out.tmp.jsonl resp.tmp.raw
+          # 清理全部临时文件
+          rm -f mod_211_dedup.tmp.json mod_22_speed_out.tmp.jsonl resp.tmp.raw
+
       - name: 提交更新结果文件
         uses: EndBug/add-and-commit@v11
         with:

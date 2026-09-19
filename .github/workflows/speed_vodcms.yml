@@ -22,9 +22,10 @@ jobs:
           INPUT_RAW="VODCMSXML.json"
           TMP_CS="VODCMSXMLcs.json"
           rm -f "$TMP_CS"
-          # 2.1.1 api链接去重，保留数组首次出现条目，输出保持原格式到VODCMSXMLcs.json
           jq '
-            reduce .[] as $item (
+            # 归一化api：移除url末尾多余斜杠，消除末尾 / 和无/ 的字符串差异，用于正确去重
+            map(.api |= ( if type=="string" then sub("/+$";"") else . end ))
+            | reduce .[] as $item (
               [];
               if any(.[]; .api == $item.api) then . else . + [$item] end
             )
@@ -35,12 +36,10 @@ jobs:
       - name: 2.2 测速模块｜读取VODCMSXMLcs.json，测速成功输出VODCMSXMLyx.json
         run: |
           TMP_CS="VODCMSXMLcs.json"
+          TMP_JSONL="speed_ok.tmp.jsonl"
           TMP_YX_RAW="VODCMSXMLyx.json"
           RESP_TMP="resp.tmp.raw"
-          rm -f "$TMP_YX_RAW" "$RESP_TMP"
-          # 输出json数组开头
-          echo "[" > "$TMP_YX_RAW"
-          first_item=1
+          rm -f "$TMP_JSONL" "$TMP_YX_RAW" "$RESP_TMP"
 
           jq -c '.[]' "$TMP_CS" | while read -r item; do
               api_url=$(echo "$item" | jq -r '.api')
@@ -79,20 +78,18 @@ jobs:
               fi
               if [[ $is_valid_content -eq 1 ]];then
                 echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
-                # 追加latency_ms字段，写入VODCMSXMLyx.json数组
-                if [[ $first_item -eq 0 ]]; then
-                  echo "," >> "$TMP_YX_RAW"
-                fi
-                echo "$item" | jq --argjson lat "$latency_ms" '. + {latency_ms:$lat}' >> "$TMP_YX_RAW"
-                first_item=0
+                # 输出单行jsonl，只追加latency_ms，字段完全继承原始源
+                echo "$item" | jq -c --argjson lat "$latency_ms" '. + {latency_ms:$lat}' >> "$TMP_JSONL"
               else
                 echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
               fi
           done
-          # 闭合json数组
-          echo "]" >> "$TMP_YX_RAW"
+
+          # jsonl转标准JSON数组，输出VODCMSXMLyx.json，结构与VODCMSXML.json完全一致
+          jq -s '.' "$TMP_JSONL" > "$TMP_YX_RAW"
           valid_raw=$(jq 'length' "$TMP_YX_RAW")
           echo "【2.2测速模块完成】测速成功源数量：${valid_raw}，临时输出：${TMP_YX_RAW}"
+          rm -f "$TMP_JSONL"
 
       - name: 2.3 测速结果处理｜重命名name、排序、分配id、字段赋值，输出VODCMSXML‑YZ.json
         run: |
@@ -102,7 +99,7 @@ jobs:
           jq '
             # 2.3.1 整体按测速延迟升序排列，数组顺序全程不再改动
             sort_by(.latency_ms)
-            # 预提取云播组延迟最小对象，用于id赋值，兼容jq1.6
+            # 预提取云播组延迟最小对象，兼容jq1.6语法
             | map(select(.group=="云播")) as $yunGroup
             | ($yunGroup | if length>0 then sort_by(.latency_ms)[0] else null end) as $yunMinObj
             # 2.3.2 name相同、api不同，name追加二级域名主体不带后缀
@@ -129,9 +126,9 @@ jobs:
                   end
               )
             | flatten
-            # 2.3.4 2.3.5 统一字段
+            # 2.3.4 2.3.5 统一状态字段
             | map(.isActive = true | .status = "可用")
-            # 2.3.3 id分配逻辑：保持延迟升序顺序；云播最小源id强制=1；其余索引+1，避让id=1冲突
+            # 2.3.3 id分配逻辑：保持延迟升序顺序；云播最小源id强制=1；其余索引+1，自动避让id=1冲突
             | to_entries
             | map(
                 .key as $idx

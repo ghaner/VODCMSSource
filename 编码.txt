@@ -5,14 +5,14 @@
 2.编码要求：代码模块
 2.1 VODCMSXML.json格式化
 2.1.1 api链接去重
-2.1.2 将格式化的点播源保持VODCMSXML.json整体格式输出至临时文件VODCMSXMLcs.json
+2.1.2 将格式化的点播源与VODCMSXML.json格式一致输出至临时文件VODCMSXMLcs.json
 2.2 测速  
 2.2.1 测速对象 临时文件VODCMSXMLcs.json中的api链接
-2.2.2 测速逻辑 与上传的speed_vodcms.yml一直
+2.2.2 测速逻辑 与上传的speed_vodcms.yml一致
 2.2.3 测速成功的点播源与VODCMSXML.json格式一致输出至临时文件VODCMSXMLyx.json
 2.3 测速结果处理  
 2.3.1 VODCMSXMLyx.json的点播源数组按照测速延迟升序排列
-2.3.2 VODCMSXMLyx.json中api链接不同name相同的点播源的name追加点播源api中的二级域名主体，格式化为：名称-二级域名主体（不要域名后缀）
+2.3.2 VODCMSXMLyx.json中api链接不同name相同的点播源的name追加点播源api链接中的二级域名主体，格式化为：名称-二级域名主体（不要域名后缀）
 2.3.3 VODCMSXMLyx.json中云播group中测速延迟最小的数组的id设定为1，其余所有点播源数组的id为测速延迟升序排列的序号+1
 2.3.4 VODCMSXMLyx.json中所有点播源的"isActive":的值统一设置为true
 2.3.5 VODCMSXMLyx.json中所有点播源的"status":的值统一设置为"可用"

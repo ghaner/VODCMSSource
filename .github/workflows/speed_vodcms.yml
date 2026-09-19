@@ -13,10 +13,8 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-
       - name: 安装工具 jq curl libxml2-utils
         run: sudo apt update && sudo apt install -y jq curl libxml2-utils
-
       - name: 2.1 VODCMSXML.json格式化｜api链接去重输出VODCMSXMLcs.json
         run: |
           INPUT_RAW="VODCMSXML.json"
@@ -32,7 +30,6 @@ jobs:
           ' "$INPUT_RAW" > "$TMP_CS"
           total_input=$(jq 'length' "$TMP_CS")
           echo "【2.1格式化完成】去重后源总数：${total_input}，输出临时文件：${TMP_CS}"
-
       - name: 2.2 测速模块｜读取VODCMSXMLcs.json，测速成功输出VODCMSXMLyx.json
         run: |
           TMP_CS="VODCMSXMLcs.json"
@@ -40,7 +37,6 @@ jobs:
           TMP_YX_RAW="VODCMSXMLyx.json"
           RESP_TMP="resp.tmp.raw"
           rm -f "$TMP_JSONL" "$TMP_YX_RAW" "$RESP_TMP"
-
           jq -c '.[]' "$TMP_CS" | while read -r item; do
               api_url=$(echo "$item" | jq -r '.api')
               src_name=$(echo "$item" | jq -r '.name')
@@ -84,20 +80,18 @@ jobs:
                 echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
               fi
           done
-
           # jsonl转标准JSON数组，输出VODCMSXMLyx.json，结构与VODCMSXML.json完全一致
           jq -s '.' "$TMP_JSONL" > "$TMP_YX_RAW"
           valid_raw=$(jq 'length' "$TMP_YX_RAW")
           echo "【2.2测速模块完成】测速成功源数量：${valid_raw}，临时输出：${TMP_YX_RAW}"
           rm -f "$TMP_JSONL"
-
       - name: 2.3 测速结果处理｜重命名name、排序、分配id、字段赋值，输出VODCMSXML‑YZ.json
         run: |
           TMP_YX_RAW="VODCMSXMLyx.json"
           OUTPUT="VODCMSXML-YZ.json"
           rm -f "$OUTPUT"
           jq '
-            # 2.3.1 整体按测速延迟升序排列，数组顺序全程不再改动
+            # 2.3.1 整体按测速延迟升序排列
             sort_by(.latency_ms)
             # 预提取云播组延迟最小对象，兼容jq1.6语法
             | map(select(.group=="云播")) as $yunGroup
@@ -128,29 +122,20 @@ jobs:
             | flatten
             # 2.3.4 2.3.5 统一状态字段
             | map(.isActive = true | .status = "可用")
-            # 2.3.3 id分配逻辑：保持延迟升序顺序；云播最小源id强制=1；其余索引+1，自动避让id=1冲突
+            # 组装输出数组：第一条放云播最小源，后面跟其余延迟升序源；无云播则维持原排序
+            | if $yunMinObj != null then
+                [ $yunMinObj ] + ( . | map(select(.api != $yunMinObj.api)) )
+              else
+                .
+              end
+            # 业务第1条 id=1；业务第2条 id=2 …；代码下标 .key 从0开始，id = .key + 1
             | to_entries
-            | map(
-                .key as $idx
-                | .value as $item
-                | if ($yunMinObj != null) and ($item.api == $yunMinObj.api) then
-                    $item + {id:1}
-                  else
-                    if (($idx + 1) == 1) then
-                       $item + {id:2}
-                    else
-                       $item + {id:($idx + 1)}
-                    end
-                  end
-                | del(.latency_ms)
-            )
+            | map( .value + {id:(.key + 1)} | del(.latency_ms) )
           ' "$TMP_YX_RAW" > "$OUTPUT"
-
           final_count=$(jq 'length' "$OUTPUT")
           echo "【2.3结果处理完成】最终可用源数量: ${final_count}，输出：${OUTPUT}"
           # 清理全部临时文件
           rm -f VODCMSXMLcs.json VODCMSXMLyx.json resp.tmp.raw
-
       - name: 提交更新结果文件
         uses: EndBug/add-and-commit@v11
         with:

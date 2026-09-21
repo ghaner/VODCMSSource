@@ -83,9 +83,8 @@ jobs:
               fi
               if [[ $is_valid_content -eq 1 ]];then
                 echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
-                # ------------------------这里是修改行，增加 isActive:true ------------------------
-                # 输出单行jsonl，追加latency_ms + isActive:true，字段完全继承原始源
-                echo "$item" | jq -c --argjson lat "$latency_ms" '. + {latency_ms:$lat, isActive:true}' >> "$TMP_JSONL"
+                # 【修改点】增加 status:"可用"，VODCMSXMLyx.json直接携带status字段
+                echo "$item" | jq -c --argjson lat "$latency_ms" '. + {latency_ms:$lat, isActive:true, status:"可用"}' >> "$TMP_JSONL"
               else
                 echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
                 echo "${pre_api_part}" >> "${FAIL_TXT}"
@@ -117,11 +116,11 @@ jobs:
           done < "${WHITELIST_FILE}"
           for target_api in "${WHITELIST_API[@]}"; do
             echo "🔍匹配白名单api: ${target_api}"
-            # 白名单条目同样补充 isActive:true
+            #【修改点】白名单同样追加 status:"可用"
             jq -c --arg api "${target_api}" '
               .[]
               | select( (.api | sub("/+$";"")) == $api )
-              | . + {latency_ms: 99999, isActive:true}
+              | . + {latency_ms: 99999, isActive:true, status:"可用"}
             ' "${TMP_RAW}" >> "${CHROME_TMP_JSONL}"
           done
           if [[ -s "${CHROME_TMP_JSONL}" ]];then

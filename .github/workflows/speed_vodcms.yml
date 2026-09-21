@@ -83,8 +83,9 @@ jobs:
               fi
               if [[ $is_valid_content -eq 1 ]];then
                 echo "✅[可用] id:${src_id} ${src_name} latency:${latency_ms}ms | ${api_url}"
-                # 输出单行jsonl，只追加latency_ms，字段完全继承原始源
-                echo "$item" | jq -c --argjson lat "$latency_ms" '. + {latency_ms:$lat}' >> "$TMP_JSONL"
+                # ------------------------这里是修改行，增加 isActive:true ------------------------
+                # 输出单行jsonl，追加latency_ms + isActive:true，字段完全继承原始源
+                echo "$item" | jq -c --argjson lat "$latency_ms" '. + {latency_ms:$lat, isActive:true}' >> "$TMP_JSONL"
               else
                 echo "❌[解析失败：返回非点播XML/JSON数据] id:${src_id} ${src_name} latency:${latency_ms}ms"
                 echo "${pre_api_part}" >> "${FAIL_TXT}"
@@ -116,10 +117,11 @@ jobs:
           done < "${WHITELIST_FILE}"
           for target_api in "${WHITELIST_API[@]}"; do
             echo "🔍匹配白名单api: ${target_api}"
+            # 白名单条目同样补充 isActive:true
             jq -c --arg api "${target_api}" '
               .[]
               | select( (.api | sub("/+$";"")) == $api )
-              | . + {latency_ms: 99999}
+              | . + {latency_ms: 99999, isActive:true}
             ' "${TMP_RAW}" >> "${CHROME_TMP_JSONL}"
           done
           if [[ -s "${CHROME_TMP_JSONL}" ]];then
@@ -142,7 +144,6 @@ jobs:
           FAIL_TXT="fail.txt"
           HTML_OUT="./sources.html"
           rm -f "$OUTPUT" "$HTML_OUT"
-
           jq '
             sort_by(.latency_ms // 99999)
             | map(select(.group=="云播")) as $yunGroup
@@ -179,10 +180,8 @@ jobs:
             | to_entries
             | map( .value + {id:(.key+1)} | del(.latency_ms) )
           ' "$TMP_YX_RAW" > "$OUTPUT"
-
           final_count=$(jq 'length' "$OUTPUT")
           echo "【2.3结果处理完成】最终可用源数量: ${final_count}，输出：${OUTPUT}"
-
           printf '%s\n' \
           '<!DOCTYPE html>' \
           '<html lang="zh-CN">' \
@@ -192,7 +191,6 @@ jobs:
           '</head>' \
           '<body>' \
           '<h3>测速失败站点（点击新窗口打开，人工查找新xml接口）</h3>' > "$HTML_OUT"
-
           if [[ -f "${FAIL_TXT}" && -s "${FAIL_TXT}" ]];then
             sort -u "${FAIL_TXT}" -o "${FAIL_TXT}"
             while IFS= read -r fail_domain; do
@@ -208,11 +206,9 @@ jobs:
               done
             done < "${FAIL_TXT}"
           fi
-
           printf '%s\n' '</body>' '</html>' >> "$HTML_OUT"
           list_cnt=$(grep -c '<div><a href' "${HTML_OUT}")
           echo "【2.3失败源HTML清单输出完成】条目数：${list_cnt}，输出 sources.html"
-
           rm -f VODCMSXMLcs.json VODCMSXMLyx.json resp.tmp.raw "${FAIL_TXT}"
       - name: 提交更新结果文件
         uses: EndBug/add-and-commit@v11
